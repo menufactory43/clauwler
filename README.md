@@ -100,6 +100,31 @@ Clauwler is a single Claude Code mod: `hooks/register.tsx` registers the hooks.
 - **The renderer** (`hooks/render.ts`, `hooks/art.ts`) draws a 320×180 frame with Scale2x sprites, a cached static layer and per-cell lighting. It runs in a Node process (`helper/`) that reads the room from a file, encodes an indexed PNG (`hooks/png.ts`) and hands the path back. The terminal reads the picture directly, so no pixel crosses Claude Code.
 - **Saves** go to the mod's store: one champion per repo, one camp per branch, one lineage for everything.
 
+## Privacy and what it touches
+
+Clauwler sends nothing anywhere: no network, no telemetry, no model calls. Everything stays on your machine.
+
+- **What it reads from the session:** on `tool.call`, after the call has run (`next(e)` is called first and its result passed on unchanged), Clauwler reads:
+  - the tool's name;
+  - whether it failed, and the error's first line, which names the monster;
+  - a commit's message, which names the seal;
+  - a file's name for reads and edits.
+
+  `turn.complete` and `session.compact` carry no content to the game. None of this leaves the game.
+- **The one command:** `command.run` answers `/clauwler` only, by opening the pane. `/clauwler stress` adds a crowd, for measuring.
+- **Programs it runs:**
+  - `git rev-list --max-parents=0 HEAD` and `git rev-parse --abbrev-ref HEAD`, both read-only, to name the repo's champion and the branch's camp;
+  - `node --version`;
+  - `node helper/engine.mjs /tmp/clauwler-<session>`, the picture process. It draws the frames and exits with Claude Code, or after 30 s idle. Its source is `helper/src/main.ts` (bundled with `tools/build-helper.sh`, a development script the mod never runs).
+- **Files it writes:**
+  - `/tmp/clauwler-<session>/state.json`, the room handed to the picture process, and the PNG frames that process writes beside it;
+  - `.perf/<session>.log` in its own folder, only when `CLAUWLER_PERF=1` is set.
+
+  It writes no settings, build, start-up or instruction file.
+- **What it reads on disk:** the names of the repo's top-level files, to pick the champion's class from the stack.
+- **Saves:** champion, lineage, camp and settings live in Claude Code's plugin store.
+- **Sounds:** `assets/sfx/*.wav` are short generated effects (`assets/make_sfx.py` makes them). `X` mutes them.
+
 ## Developing
 
 ```sh

@@ -33,7 +33,9 @@ const seed = () => Math.floor(Math.random() * 2 ** 31)
 // ---------- what lives between frames ----------
 
 let root = ''
-let perfPath = ''
+/** The session's short id, naming the picture folder and the perf log; the log is off when empty. */
+let perfId = ''
+let sessionShort = ''
 let mirror: GameState | null = null
 let live: Live | null = null
 const frame = new Uint8Array(FW * FH * 4)
@@ -202,13 +204,16 @@ function normalizeRemote(remote: string | null): string | null {
   return remote.trim().replace(/^[a-z+]+:\/\//, '').replace(/^[^@/]+@/, '').replace(/:(?!\d)/, '/').replace(/\.git$/, '').replace(/\/+$/, '')
 }
 
-async function git($: EngineInterface, cwd: string, args: string[]): Promise<string | null> {
-  try {
-    const ran = await $.process.run(['git', ...args], { cwd, timeoutMs: 3000 })
-    return ran.exitCode === 0 ? ran.stdout.trim() : null
-  } catch {
-    return null
-  }
+/** The repo's first commit, which names a repo with no remote: read-only. */
+async function firstCommit($: EngineInterface, cwd: string): Promise<string | null> {
+  const ran = await $.process.run(['git', 'rev-list', '--max-parents=0', 'HEAD'], { cwd, timeoutMs: 3000 }).catch(() => null)
+  return ran?.exitCode === 0 ? ran.stdout.trim() : null
+}
+
+/** The current branch, which picks the camp: read-only. */
+async function currentBranch($: EngineInterface, cwd: string): Promise<string | null> {
+  const ran = await $.process.run(['git', 'rev-parse', '--abbrev-ref', 'HEAD'], { cwd, timeoutMs: 3000 }).catch(() => null)
+  return ran?.exitCode === 0 ? ran.stdout.trim() : null
 }
 
 async function detectClass($: EngineInterface, dir: string): Promise<ClassId> {
@@ -232,11 +237,11 @@ async function loadContext($: EngineInterface): Promise<{ ctx: Ctx; cls: ClassId
   if (!repo) return { ctx: { repoKey: 'wild', repoName: tr('Terres sauvages', 'Wildlands'), branch: '-', isWild: true }, cls: 'vagabond', root: await $.session.root() }
   let key = normalizeRemote(repo.remote)
   if (!key) {
-    const first = await git($, repo.root, ['rev-list', '--max-parents=0', 'HEAD'])
+    const first = await firstCommit($, repo.root)
     key = first ? `local:${first.split('\n')[0]!.slice(0, 12)}` : `path:${repo.root}`
   }
   const repoName = (normalizeRemote(repo.remote) ?? repo.root).split('/').pop() || tr('dépôt', 'repo')
-  const branch = (await git($, repo.root, ['rev-parse', '--abbrev-ref', 'HEAD'])) ?? 'main'
+  const branch = (await currentBranch($, repo.root)) ?? 'main'
   return { ctx: { repoKey: key, repoName, branch, isWild: false }, cls: await detectClass($, repo.root), root: repo.root }
 }
 
@@ -324,7 +329,7 @@ async function start($: EngineInterface, isOpening: boolean) {
   root = loaded.root
   // The perf log is for working on the mod: CLAUWLER_PERF=1 writes it to .perf/ in the mod's folder.
   const isPerf = !!(await $.env.get('CLAUWLER_PERF').catch(() => undefined))
-  if (isPerf) perfPath = `${$.plugin.root}/.perf/${sessionId.slice(0, 8)}.log`
+  if (isPerf) perfId = sessionId.slice(0, 8)
   // Real pixels wherever the terminal draws them, as Claude Code itself decides; a cell
   // mode picked with O or G holds for this session and in terminals without pictures.
   const saved = await $.store.get('gfx')
@@ -394,11 +399,11 @@ function autoAim(input: Input) {
 }
 
 function moveInput(t: number): Input {
-  const on = (k: keyof typeof held) => held[k] > t
+  const isHeld = (k: keyof typeof held) => held[k] > t
   const at = (k: keyof typeof aim) => aim[k] > t
   const input: Input = {
-    mx: (on('right') ? 1 : 0) - (on('left') ? 1 : 0),
-    my: (on('down') ? 1 : 0) - (on('up') ? 1 : 0),
+    mx: (isHeld('right') ? 1 : 0) - (isHeld('left') ? 1 : 0),
+    my: (isHeld('down') ? 1 : 0) - (isHeld('up') ? 1 : 0),
     ax: (at('right') ? 1 : 0) - (at('left') ? 1 : 0),
     ay: (at('down') ? 1 : 0) - (at('up') ? 1 : 0),
     ...edges,
@@ -443,7 +448,7 @@ async function flushPerf($: EngineInterface, t: number) {
   helper.frames = 0
   helper.ms = 0
   Object.assign(perf, { frozen: 0, slowed: 0, foes: 0, since: t, ticks: 0, tickGap: 0, blits: 0, render: 0, encode: 0, blit: 0, bytes: 0, panes: 0 })
-  if (perfPath) await $.fs.write(perfPath, perf.lines.join('\n') + '\n').catch(() => undefined)
+  if (perfId) await $.fs.write(`${$.plugin.root}/.perf/${perfId}.log`, perf.lines.join('\n') + '\n').catch(() => undefined)
 }
 
 /** Starts the picture process once Node answers; its frames are shown as they come. */
@@ -457,7 +462,8 @@ async function startHelper($: EngineInterface, sessionId: string) {
     helper.isStarting = false
     return
   }
-  helper.dir = `/tmp/clauwler-${sessionId.slice(0, 8)}`
+  sessionShort = sessionId.slice(0, 8)
+  helper.dir = `/tmp/clauwler-${sessionShort}`
   void (async () => {
     try {
       const child = $.process.spawn({ argv: ['node', `${$.plugin.root}/helper/engine.mjs`, helper.dir] })
@@ -561,7 +567,7 @@ async function tick($: EngineInterface) {
     const s0 = Date.now()
     helper.gen++
     try {
-      await $.fs.write(`${helper.dir}/state.json`, JSON.stringify({ gen: helper.gen, live, view: viewOf(mirror) }))
+      await $.fs.write(`/tmp/clauwler-${sessionShort}/state.json`, JSON.stringify({ gen: helper.gen, live, view: viewOf(mirror) }))
     } catch {
       helper.fails++
     }
@@ -822,12 +828,12 @@ async function feed($: EngineInterface, ev: SessionEvent) {
   const isOpen = isLive && !!live && !live.isCleared
   const heal = live ? Math.max(3, Math.round(live.stats.maxHp * TEST_HEAL)) : 0
   await change($, g => {
-    const next = applyEvent(g, ev, now(), isLive)
-    const forged = next.lineage.vault.length > g.lineage.vault.length ? next.lineage.vault[next.lineage.vault.length - 1]?.name : undefined
+    const after = applyEvent(g, ev, now(), isLive)
+    const forged = after.lineage.vault.length > g.lineage.vault.length ? after.lineage.vault[after.lineage.vault.length - 1]?.name : undefined
     // A commit pays at once, beside its seal: the session gives, it never takes.
-    if (ev.kind === 'commit' && isLive && next.run) next.run.eclats += COMMIT_ECLATS
-    sessionNote = noteFor(ev, { isLive, isOpen, seals: next.feed.seals, relic: forged, heal })
-    return next
+    if (ev.kind === 'commit' && isLive && after.run) after.run.eclats += COMMIT_ECLATS
+    sessionNote = noteFor(ev, { isLive, isOpen, seals: after.feed.seals, relic: forged, heal })
+    return after
   })
   if (!isLive || !live) return
   const before = live.enemies.length

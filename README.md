@@ -52,14 +52,14 @@ You need:
 ### From the marketplace
 
 ```sh
-claude plugin marketplace add meffysto/clauwler
+claude plugin marketplace add menufactory43/clauwler
 claude plugin install clauwler@clauwler
 ```
 
 ### Or from a clone
 
 ```sh
-git clone https://github.com/meffysto/clauwler ~/clauwler
+git clone https://github.com/menufactory43/clauwler ~/clauwler
 claude --plugin-dir ~/clauwler
 ```
 

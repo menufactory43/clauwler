@@ -27,7 +27,7 @@ test('/clauwler drops straight into the dungeon; H leads to the Hall and back', 
   await ui.unmount()
 
   const away = await $.ui.mount({ plugin: 'clauwler', surface: 'terminal', ...pane(false) } as never) as any
-  expect(await away.find({ text: /ctrl\+x tab pour jouer/ })).toBeDefined()
+  expect(await away.find({ text: /ctrl\+x tab/ })).toBeDefined()
   await away.unmount()
 
   const desk = await $.ui.mount({ plugin: 'clauwler', surface: 'desktop', ...pane(true) } as never) as any

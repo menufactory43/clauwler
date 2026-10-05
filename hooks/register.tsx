@@ -20,7 +20,7 @@ import { SIGNAL_SFX, gainOf, newMixer, pickSounds } from './sound'
 
 const PANE = 'clauwler'
 /** Shown in the pane, so a reload can be told from a stale module. */
-const BUILD = 'v1.2'
+const BUILD = 'v1.3'
 const FPS = 24
 const IDLE_MS = 8000
 const game = atom({ plugin: 'clauwler', key: 'game' } as const, null)
@@ -1000,7 +1000,7 @@ export const register: Register = on => {
           {arena}
           {sessionLine()}
           <Box flexDirection="row" columnGap={1}>
-            {isFocused ? <Text color="#6daa2c" bold>🎮</Text> : <Text color="#dad45e" bold>⌨ ctrl+x tab pour jouer ·</Text>}
+            {isFocused ? <Text color="#6daa2c" bold>🎮</Text> : <Text color="#dad45e" bold wrap="truncate-end">⌨ ctrl+x tab</Text>}
             {run.offer ? null : runPad.map(([hotkey, label]) => <Button key={`p-${hotkey}`} plain hotkey={hotkey} label={label} dimColor={!isFocused} onPress={() => onKey($, hotkey)} />)}
             {isMuted ? <Text dimColor>🔇</Text> : null}
           </Box>
@@ -1044,7 +1044,7 @@ export const register: Register = on => {
               </Box>
             </Box>
           )}
-          {g.isPaused && <Text dimColor>⚔ {championTitle(c)} · niv {c.level} · Étage {run.biome + 1}/{BIOMES} {run.biomeName} · P carte et build · {BUILD}</Text>}
+          {g.isPaused && <Text dimColor wrap="truncate-end">⚔ {championTitle(c)} · niv {c.level} · {run.biomeName} · {BUILD}</Text>}
           {g.isPaused && run.boons.length > 0 && (
             <Text wrap="truncate-end">
               <Text dimColor>Bienfaits </Text>

@@ -932,9 +932,9 @@ async function onTurn($: EngineInterface, durationMs: number, turnId: string) {
 }
 
 function hashText(text: string): number {
-  let h = 2166136261
-  for (let i = 0; i < text.length; i++) h = Math.imul(h ^ text.charCodeAt(i), 16777619)
-  return h >>> 0
+  let hash = 2166136261
+  for (let i = 0; i < text.length; i++) hash = Math.imul(hash ^ text.charCodeAt(i), 16777619)
+  return hash >>> 0
 }
 
 // ---------- the hooks ----------

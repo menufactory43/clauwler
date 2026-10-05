@@ -20,7 +20,7 @@ import { SIGNAL_SFX, gainOf, newMixer, pickSounds } from './sound'
 
 const PANE = 'clauwler'
 /** Shown in the pane, so a reload can be told from a stale module. */
-const BUILD = 'v0.9'
+const BUILD = 'v1.0'
 const FPS = 24
 const IDLE_MS = 8000
 const game = atom({ plugin: 'clauwler', key: 'game' } as const, null)
@@ -930,7 +930,12 @@ export const register: Register = on => {
             renderFrame(live, viewOf(g), fineFrame)
             frameB64 = toBase64(encodeIndexedPng(fineFrame, FINE_SIZE.width, FINE_SIZE.height))
           }
-          arena = <Image key="arena" source={{ png: frameB64 }} columns={cols} rows={Math.max(8, Math.round((cols * FINE_SIZE.height) / FINE_SIZE.width / 2))} alt="Pas d'image dans ce terminal." />
+          // As large as the pane allows: its width, or the rows left once the four text lines are drawn.
+          const bodyRows = (e.props as { scroll?: { bodyRows?: number } }).scroll?.bodyRows ?? 40
+          const spareRows = Math.max(8, bodyRows - (g.isPaused || run.offer ? 12 : 4))
+          const fitCols = Math.min(e.props.bodyColumns, Math.floor((spareRows * 2 * FINE_SIZE.width) / FINE_SIZE.height))
+          const fitRows = Math.max(8, Math.round((fitCols * FINE_SIZE.height) / FINE_SIZE.width / 2))
+          arena = <Box justifyContent="center"><Image key="arena" source={{ png: frameB64 }} columns={fitCols} rows={fitRows} alt="Pas d'image dans ce terminal." /></Box>
         } else {
           const spare = (e.viewport?.rows ?? 40) - 16
           if (gfx === 'quads') {
@@ -966,13 +971,9 @@ export const register: Register = on => {
               ? <Text bold color="#dad45e" wrap="truncate-end">{hud.banner}</Text>
               : <Text> </Text>
       const shield = Math.floor(live?.effects?.shield ?? 0)
-      const runPad: [string, string][] = [['z', '↑'], ['q', '←'], ['s', '↓'], ['d', '→'], ['e', 'esquive'], ['r', 'pouvoir'], ['p', 'pause'], ['h', 'camp'], ['x', isMuted ? 'son coupé' : 'son']]
+      const runPad: [string, string][] = [['z', '↑'], ['q', '←'], ['s', '↓'], ['d', '→'], ['e', 'esquive'], ['r', 'pouvoir'], ['p', 'pause · carte'], ['h', 'camp'], ['x', 'son']]
       return (
         <Box flexDirection="column">
-          <Text wrap="truncate-end">
-            <Text bold color="#dad45e">⚔ {championTitle(c)} </Text>
-            <Text dimColor>niv {c.level} · Étage {run.biome + 1}/{BIOMES} {run.biomeName} · « {roomName(run)} »</Text>
-          </Text>
           {hud ? (
             <Text wrap="truncate-end">
               <Text color="#d04648">♥ {bar(hud.hp / Math.max(1, hud.maxHp), 10)}</Text>
@@ -982,15 +983,16 @@ export const register: Register = on => {
               <Text color="#597dce">  R {'▮'.repeat(hud.ammo)}{'▯'.repeat(Math.max(0, hud.maxAmmo - hud.ammo))}</Text>
               <Text color={hud.isDashReady ? '#6dc2ca' : '#4e4a4e'}>  E {hud.isDashReady ? '●' : '○'}</Text>
               <Text color="#dad45e">  ✦ {run.boons.length}</Text>
-              <Text dimColor>  {isMuted ? '🔇' : '🔊'}</Text>
+              <Text dimColor>  Étage {run.biome + 1}/{BIOMES} · « {roomName(run)} »</Text>
             </Text>
-          ) : <Text> </Text>}
+          ) : <Text dimColor>⚔ {championTitle(c)} · Étage {run.biome + 1}/{BIOMES} {run.biomeName}</Text>}
           {top}
           {arena}
           {sessionLine()}
-          <Box flexDirection="row" flexWrap="wrap" columnGap={2}>
-            {focusLine}
+          <Box flexDirection="row" columnGap={1}>
+            {isFocused ? <Text color="#6daa2c" bold>🎮</Text> : <Text color="#dad45e" bold>⌨ ctrl+x tab pour jouer ·</Text>}
             {run.offer ? null : runPad.map(([hotkey, label]) => <Button key={`p-${hotkey}`} plain hotkey={hotkey} label={label} dimColor={!isFocused} onPress={() => onKey($, hotkey)} />)}
+            <Text dimColor>{isMuted ? '🔇' : ''} {BUILD}</Text>
           </Box>
           {run.offer ? (
             <Box flexDirection="column" marginTop={1}>
@@ -1024,15 +1026,16 @@ export const register: Register = on => {
                 )
               })}
             </Box>
-          ) : (
-            <Box flexDirection="row" columnGap={2}>
+          ) : !g.isPaused ? null : (
+            <Box flexDirection="row" columnGap={2} marginTop={1}>
               {minimap(run)}
               <Box flexDirection="column" flexShrink={1}>
                 {run.log.slice(-3).map((line, i, all) => <Text key={`l${i}`} dimColor={i < all.length - 1} wrap="truncate-end">{line}</Text>)}
               </Box>
             </Box>
           )}
-          {run.boons.length > 0 && (
+          {g.isPaused && <Text dimColor>⚔ {championTitle(c)} · niv {c.level} · Étage {run.biome + 1}/{BIOMES} {run.biomeName}</Text>}
+          {g.isPaused && run.boons.length > 0 && (
             <Text wrap="truncate-end">
               <Text dimColor>Bienfaits </Text>
               {run.boons.map((b, i) => {
@@ -1041,7 +1044,7 @@ export const register: Register = on => {
               })}
             </Text>
           )}
-          {(run.items ?? []).length > 0 && <Text color="#d2aa99" wrap="truncate-end">{buildSummary(run).split('   ').find(part => part.startsWith('Objets')) ?? ''}</Text>}
+          {g.isPaused && (run.items ?? []).length > 0 && <Text color="#d2aa99" wrap="truncate-end">{buildSummary(run).split('   ').find(part => part.startsWith('Objets')) ?? ''}</Text>}
         </Box>
       )
     }

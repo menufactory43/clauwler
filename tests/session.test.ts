@@ -72,12 +72,15 @@ test('live: a failing command opens a rift, green tests heal, a commit pays, a t
   await ($ as any).turn.complete({ answer: 'fini', durationMs: 90_000, isAborted: false, turnId: 't1', reason: 'answer' })
   await clock.advance(100)
   expect(await ui.find({ text: /Écho de session|fini son tour/ })).toBeDefined()
+  // The map, with the Écho on it, shows while paused.
+  await ui.press({ key: 'p-p' })
   expect(await ui.find({ text: /✧/ })).toBeDefined()
+  await ui.press({ key: 'p-p' })
 
   // Sounds: some played, and X mutes them.
   expect(sounds.length > 0).toBe(true)
   await ui.press({ key: 'p-x' })
-  expect(await ui.find({ text: /son coupé/ })).toBeDefined()
+  expect(await ui.find({ text: /🔇/ })).toBeDefined()
   const heard = sounds.length
   await $.tool.call({ tool: 'Bash', command: 'npm test' } as never)
   await clock.advance(300)
@@ -102,6 +105,8 @@ test('runes carved by Claude become a boon offer: name, rarity, god, description
   const before = sounds.length
   await ui.press({ key: 'o-1' })
   expect(sounds.slice(before)).toContain('assets/sfx/levelup.wav')
+  // The build shows with the map while the fight is paused.
+  await ui.press({ key: 'p-p' })
   expect(await ui.find({ text: /^Bienfaits/ })).toBeDefined()
   await ui.unmount()
 })

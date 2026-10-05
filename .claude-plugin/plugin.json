@@ -1,6 +1,6 @@
 {
   "name": "clauwler",
   "version": "0.1.0",
-  "description": "Roguelike façon Hades dans un panneau : ta session Claude génère le donjon, ta lignée persiste entre sessions.",
+  "description": "A real-time pixel-art roguelike in a pane, fed by your Claude session: its errors become monsters, its commits forge relics. / Un roguelike pixel-art en temps réel nourri par ta session Claude.",
   "types": "./types/index.d.ts"
 }

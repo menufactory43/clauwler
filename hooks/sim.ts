@@ -16,6 +16,7 @@
 import type { ErrorSpawn, RoomKind, SessionEvent, Side, WeaponId } from '../types'
 import type { CombatStats } from './data'
 import { hash } from './data'
+import { L, localize, localizeAll, tr } from './i18n'
 import type { RGB } from './art'
 // Build effects (statuses, extra shots, shields...): the build agent's hook points, one line each.
 import * as FX from './effects'
@@ -344,26 +345,29 @@ export const ENEMY: Record<EnemyType, EnemyDef> = {
   boss: { hp: 280, r: 9, speed: 26, dmg: 12, range: 0, windup: 0.8, act: 0.6, recover: 1.2, level: 10, keep: 36, cd: 1 },
 }
 
-export const NAMES: Record<EnemyType, string> = {
-  rat: 'Rat de node_modules',
-  goblin: 'Gobelin TODO',
-  slug: 'Warning Rampant',
-  skeleton: 'Squelette Legacy',
-  larva: 'Larve',
+/** The forker's raised dead, in either language (a room keeps the names it was made with). */
+const isZombie = (name: string) => name === 'Processus Zombie' || name === 'Zombie Process'
+
+export const NAMES: Record<EnemyType, string> = localize({
+  rat: L('Rat de node_modules', 'node_modules Rat'),
+  goblin: L('Gobelin TODO', 'TODO Goblin'),
+  slug: L('Warning Rampant', 'Crawling Warning'),
+  skeleton: L('Squelette Legacy', 'Legacy Skeleton'),
+  larva: L('Larve', 'Larva'),
   bug: 'Bug',
-  linter: 'Prêcheur du Lint',
-  forker: 'Nécromant du Fork',
-  turret: 'Tourelle CI',
-  miner: 'Poseur de Breakpoints',
-  burrower: 'Ver de Cache',
-  monolith: 'Monolithe Gluant',
+  linter: L('Prêcheur du Lint', 'Lint Preacher'),
+  forker: L('Nécromant du Fork', 'Fork Necromancer'),
+  turret: L('Tourelle CI', 'CI Turret'),
+  miner: L('Poseur de Breakpoints', 'Breakpoint Layer'),
+  burrower: L('Ver de Cache', 'Cache Worm'),
+  monolith: L('Monolithe Gluant', 'Sticky Monolith'),
   micro: 'Microservice',
-  sentinel: 'Sentinelle CORS',
-  reviewer: 'Relecteur LGTM',
-  leak: 'Fuite Mémoire',
-  sniper: 'Profileur Embusqué',
-  boss: 'Gardien',
-}
+  sentinel: L('Sentinelle CORS', 'CORS Sentinel'),
+  reviewer: L('Relecteur LGTM', 'LGTM Reviewer'),
+  leak: L('Fuite Mémoire', 'Memory Leak'),
+  sniper: L('Profileur Embusqué', 'Lurking Profiler'),
+  boss: L('Gardien', 'Guardian'),
+})
 
 /** The bits a body breaks into. */
 export const GIB: Record<EnemyType, RGB[]> = {
@@ -454,7 +458,7 @@ function nearFree(live: Live, x: number, y: number, r = 7): { x: number; y: numb
 
 const ERROR_TYPES: EnemyType[] = ['goblin', 'slug', 'skeleton', 'linter', 'sentinel', 'sniper', 'leak', 'monolith', 'miner']
 const AFFIXES: Affix[] = ['rapide', 'volatile', 'scinde', 'blinde']
-export const AFFIX_LABEL: Record<Affix, string> = { rapide: 'rapide', volatile: 'volatile', scinde: 'scindé', blinde: 'blindé' }
+export const AFFIX_LABEL: Record<Affix, string> = localize({ rapide: L('rapide', 'swift'), volatile: L('volatile', 'volatile'), scinde: L('scindé', 'splitting'), blinde: L('blindé', 'armored') })
 
 function errorType(sig: string): EnemyType {
   return ERROR_TYPES[hash(sig) % ERROR_TYPES.length] ?? 'goblin'
@@ -467,8 +471,8 @@ export function spawnError(live: Live, spawn: ErrorSpawn, isAnnounced: boolean) 
   if (e.affix === 'rapide') e.speed = Math.round(e.speed * 1.35)
   live.enemies.push(e)
   if (isAnnounced) {
-    live.banner = { text: `${spawn.sig} surgit !`, ttl: 1.6 }
-    live.signals.push({ k: 'log', text: `⚡ ${spawn.name} surgit de la session (${AFFIX_LABEL[e.affix ?? 'rapide']}) !` })
+    live.banner = { text: tr(`${spawn.sig} surgit !`, `${spawn.sig} breaks out!`), ttl: 1.6 }
+    live.signals.push({ k: 'log', text: tr(`⚡ ${spawn.name} surgit de la session (${AFFIX_LABEL[e.affix ?? 'rapide']}) !`, `⚡ ${spawn.name} crawls out of the session (${AFFIX_LABEL[e.affix ?? 'rapide']})!`) })
   }
 }
 
@@ -496,14 +500,14 @@ function spawnWave(live: Live) {
 type GuardianDef = { p1: BossMove[]; p2: BossMove[]; adds: EnemyType; addName: string; addCount: number; roar: string; isBurning: boolean }
 
 /** One guardian a biome, two phases each; a Némésis takes one of their shapes. */
-export const GUARDIANS: GuardianDef[] = [
+export const GUARDIANS: GuardianDef[] = localizeAll([
   // Le Merge Conflict: lanes and crossings, HEAD against incoming.
-  { p1: ['cross', 'burst', 'charge', 'fan'], p2: ['rows', 'spiral', 'charge', 'cross', 'summon', 'burst', 'cols'], adds: 'micro', addName: 'Hunk orphelin', addCount: 3, roar: 'Le conflit s’envenime !', isBurning: false },
+  { p1: ['cross', 'burst', 'charge', 'fan'], p2: ['rows', 'spiral', 'charge', 'cross', 'summon', 'burst', 'cols'], adds: 'micro', addName: L('Hunk orphelin', 'Orphan Hunk'), addCount: 3, roar: L('Le conflit s’envenime !', 'The conflict festers!'), isBurning: false },
   // Le Démon de la Prod: incidents raining down, the floor on fire.
-  { p1: ['fan', 'rain', 'slam', 'burst'], p2: ['rain', 'spiral', 'fan', 'summon', 'slam', 'rain'], adds: 'leak', addName: 'Incident', addCount: 2, roar: 'La prod est en feu !', isBurning: true },
+  { p1: ['fan', 'rain', 'slam', 'burst'], p2: ['rain', 'spiral', 'fan', 'summon', 'slam', 'rain'], adds: 'leak', addName: L('Incident', 'Incident'), addCount: 2, roar: L('La prod est en feu !', 'Prod is on fire!'), isBurning: true },
   // L'Hydre des Dépendances: heads that aim, a swarm of transitive deps.
-  { p1: ['snipe', 'burst', 'summon', 'cols'], p2: ['grid', 'snipe', 'spiral', 'summon', 'rain', 'snipe'], adds: 'bug', addName: 'Dépendance transitive', addCount: 5, roar: 'Deux têtes repoussent !', isBurning: false },
-]
+  { p1: ['snipe', 'burst', 'summon', 'cols'], p2: ['grid', 'snipe', 'spiral', 'summon', 'rain', 'snipe'], adds: 'bug', addName: L('Dépendance transitive', 'Transitive Dependency'), addCount: 5, roar: L('Deux têtes repoussent !', 'Two heads grow back!'), isBurning: false },
+])
 
 const BOSS_WIND: Record<BossMove, number> = { burst: 0.75, spiral: 0.7, fan: 0.6, charge: 0.75, slam: 0.8, rows: 1.0, cols: 1.0, cross: 0.9, grid: 1.1, rain: 0.9, summon: 0.9, snipe: 0.8 }
 
@@ -595,22 +599,22 @@ export function inject(live: Live, ev: SessionEvent) {
       break
     case 'test':
       live.pickups.push({ ...freeSpot(live, 16), kind: 'chest', t: 0 })
-      live.signals.push({ k: 'log', text: '$ Des tests passent au vert : un coffre apparaît.' })
+      live.signals.push({ k: 'log', text: tr('$ Des tests passent au vert : un coffre apparaît.', '$ Tests go green: a chest appears.') })
       break
     case 'agent':
       addAlly(live)
-      live.banner = { text: 'Familier invoqué', ttl: 1.2 }
-      live.signals.push({ k: 'log', text: 'Un sous-agent est invoqué : un familier combat à tes côtés.' })
+      live.banner = { text: tr('Familier invoqué', 'Familiar summoned'), ttl: 1.2 }
+      live.signals.push({ k: 'log', text: tr('Un sous-agent est invoqué : un familier combat à tes côtés.', 'A subagent is summoned: a familiar fights at your side.') })
       break
     case 'web':
       live.pickups.push({ ...freeSpot(live, 16), kind: 'portal', t: 0 })
-      live.signals.push({ k: 'log', text: 'Une recherche ouvre un portail vers un bienfait.' })
+      live.signals.push({ k: 'log', text: tr('Une recherche ouvre un portail vers un bienfait.', 'A search opens a portal to a boon.') })
       break
     case 'compact':
       live.shake = 0.6
-      live.banner = { text: 'Seisme !', ttl: 1.2 }
+      live.banner = { text: tr('Seisme !', 'Quake!'), ttl: 1.2 }
       for (const e of [...live.enemies]) if (e.state !== 'spawn') damageEnemy(live, e, Math.round(e.maxHp * (e.kind === 'boss' || e.kind === 'nemesis' ? 0.1 : 0.5)), false, 0, 0)
-      live.signals.push({ k: 'log', text: '🌋 Le contexte se compacte : la salle tremble et écrase tes ennemis.' })
+      live.signals.push({ k: 'log', text: tr('🌋 Le contexte se compacte : la salle tremble et écrase tes ennemis.', '🌋 The context compacts: the room shakes and crushes your foes.') })
       break
     case 'read': {
       const s = live.stats
@@ -672,7 +676,7 @@ function damageEnemy(live: Live, e: Enemy, amount: number, isCrit: boolean, kx: 
   if ((e.inv ?? 0) > 0) {
     if (live.t - (e.blockT ?? -9) > 0.35) {
       e.blockT = live.t
-      num(live, e.x, e.y - e.r - 8, 'immunisé', [133, 149, 161])
+      num(live, e.x, e.y - e.r - 8, tr('immunisé', 'immune'), [133, 149, 161])
       sfx(live, 'block')
     }
     return
@@ -686,7 +690,7 @@ function damageEnemy(live: Live, e: Enemy, amount: number, isCrit: boolean, kx: 
       e.kby = (e.kby ?? 0) + by * 25
       if (live.t - (e.blockT ?? -9) > 0.4) {
         e.blockT = live.t
-        num(live, e.x, e.y - e.r - 8, 'bloqué', [133, 149, 161])
+        num(live, e.x, e.y - e.r - 8, tr('bloqué', 'blocked'), [133, 149, 161])
         sfx(live, 'block')
       }
       return
@@ -765,7 +769,7 @@ function killEnemy(live: Live, e: Enemy) {
   if (e.affix === 'scinde') {
     for (const side of [-1, 1]) {
       const at = nearFree(live, e.x + side * 6, e.y, 3)
-      const m = makeEnemy(live, 'larva', 'minion', at.x, at.y, `Éclat de ${e.sig ?? e.name}`)
+      const m = makeEnemy(live, 'larva', 'minion', at.x, at.y, tr(`Éclat de ${e.sig ?? e.name}`, `Fragment of ${e.sig ?? e.name}`))
       m.t = 0.3
       live.enemies.push(m)
     }
@@ -778,7 +782,7 @@ function hurtPlayer(live: Live, amount: number, from: Enemy | null, killer: stri
   if (p.iframes > 0 || live.isDead) return
   const s = live.stats
   if (rnd(live) < s.dodge) {
-    num(live, p.x, p.y - 12, 'esquive', [109, 194, 202])
+    num(live, p.x, p.y - 12, tr('esquive', 'dodge'), [109, 194, 202])
     p.iframes = 0.3
     return
   }
@@ -806,7 +810,7 @@ function hurtPlayer(live: Live, amount: number, from: Enemy | null, killer: stri
       p.defiance -= 1
       p.hp = Math.ceil(s.maxHp / 2)
       p.iframes = 1.5
-      live.banner = { text: 'Defi de la mort', ttl: 1.5 }
+      live.banner = { text: tr('Defi de la mort', 'Death Defiance'), ttl: 1.5 }
       live.signals.push({ k: 'revived' })
     } else {
       live.isDead = true
@@ -1086,7 +1090,7 @@ function doCast(live: Live) {
   const p = live.player
   const s = live.stats
   if (live.ammo <= 0) {
-    num(live, p.x, p.y - 12, 'vide', [117, 113, 97])
+    num(live, p.x, p.y - 12, tr('vide', 'empty'), [117, 113, 97])
     return
   }
   live.ammo -= 1
@@ -1158,7 +1162,7 @@ export function step(live: Live, input: Input, dtIn: number) {
       live.isCleared = true
       live.projs = live.projs.filter(one => one.team === 'p')
       live.strikes = []
-      live.banner = { text: 'Salle nettoyee', ttl: 1.2 }
+      live.banner = { text: tr('Salle nettoyee', 'Room cleared'), ttl: 1.2 }
       const at = nearFree(live, 80, Math.round((ROOM.y0 + ROOM.y1) / 2))
       if (live.isBoss) live.pickups.push({ ...at, kind: 'stairs', t: 0 })
       else {
@@ -1296,7 +1300,7 @@ function updateProjs(live: Live, dt: number) {
     if (pr.team === 'e') {
       // A small heart to hit: bullets graze the cape and miss.
       if (dist(pr.x, pr.y, p.x, p.y - 3) < pr.r + 2.5) {
-        hurtPlayer(live, pr.dmg, null, pr.by ?? 'Warning Rampant', pr.x - pr.vx, pr.y - pr.vy)
+        hurtPlayer(live, pr.dmg, null, pr.by ?? NAMES.slug, pr.x - pr.vx, pr.y - pr.vy)
         remove(live, pr)
       }
       continue
@@ -1497,7 +1501,7 @@ function isReady(live: Live, e: Enemy, d: number): boolean {
   const def = ENEMY[e.type]
   switch (e.type) {
     case 'forker':
-      return d <= def.range && live.enemies.filter(one => one.name === 'Processus Zombie').length < 4 && (e.seq ?? 0) < 8
+      return d <= def.range && live.enemies.filter(one => isZombie(one.name)).length < 4 && (e.seq ?? 0) < 8
     case 'miner':
       return live.strikes.filter(s => s.from === e.id && s.mine > 0).length < 3 && d < 90
     case 'reviewer':
@@ -1537,7 +1541,7 @@ function beginWindup(live: Live, e: Enemy) {
     case 'forker':
       for (let i = 0; i < 2; i++) {
         const at = nearFree(live, e.x + (i === 0 ? -12 : 12), e.y + 6, 3)
-        strike(live, { shape: 'circle', x: at.x, y: at.y, r: 5, t: e.t, dmg: 0, by: e.name, color: PURPLE, from: e.id, isTied: true, after: 'summon', spawn: 'larva', spawnName: 'Processus Zombie' })
+        strike(live, { shape: 'circle', x: at.x, y: at.y, r: 5, t: e.t, dmg: 0, by: e.name, color: PURPLE, from: e.id, isTied: true, after: 'summon', spawn: 'larva', spawnName: tr('Processus Zombie', 'Zombie Process') })
       }
       e.seq = (e.seq ?? 0) + 2
       break

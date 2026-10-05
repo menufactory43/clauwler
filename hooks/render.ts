@@ -6,6 +6,7 @@ import {
 } from './art'
 import type { Enemy, Live, Strike } from './sim'
 import { AFFIX_LABEL, ENEMY, FH, FW, ROOM, rayToWall } from './sim'
+import { tr } from './i18n'
 
 export type View = {
   biomeLabel: string
@@ -1254,10 +1255,10 @@ function drawHud(b: Buf, live: Live, view: View) {
   if (live.banner && !isOverlay) banner(b, live.banner.text, mid, P.y!, 0.6 * Math.min(1, live.banner.ttl * 3))
   if (live.isDead) {
     rect(b, 0, 0, VW, VH, P.k!, 0.6)
-    centered(b, 'TU ES TOMBE', mid - 3, P.r!)
+    centered(b, tr('TU ES TOMBE', 'YOU FELL'), mid - 3, P.r!)
   } else if (view.isOffer) {
     rect(b, 0, 10, VW, VH - 10, P.k!, 0.55)
-    centered(b, 'BIENFAIT', mid - 8, P.y!)
+    centered(b, tr('BIENFAIT', 'BOON'), mid - 8, P.y!)
     centered(b, '1  2  3', mid, P.y!)
   } else if (view.isPaused) {
     rect(b, 0, 10, VW, VH - 10, P.k!, 0.55)

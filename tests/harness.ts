@@ -14,9 +14,10 @@ export const blits: { cells?: string; image?: { rgba?: string; png?: string; wid
 /** The clips the mod asked `$.audio.play` for, in order. */
 export const sounds: string[] = []
 
-export async function boot($: any, on: any, term = 'xterm-256color') {
+/** `lang`: the locale in the environment; the French tests run in French, '' leaves it unset (English). */
+export async function boot($: any, on: any, term = 'xterm-256color', lang = 'fr_FR.UTF-8') {
   mock.store(on)
-  mock.env(on, { TERM: term })
+  mock.env(on, lang ? { TERM: term, LANG: lang } : { TERM: term })
   const clock = mock.clock(on, { now: Date.parse('2026-10-05T10:00:00Z') })
   on('session.id', () => ({ value: 'session-test' }))
   on('session.repo', () => ({ value: null }))

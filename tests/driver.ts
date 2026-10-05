@@ -156,10 +156,18 @@ function aim(live: Live, t: number, g?: GameState): Input {
   return input
 }
 
-export type BotResult = { isWin: boolean; depth: number; floors: number; eclats: number; rooms: number; g: GameState; live: Live | null }
+export type BotResult = { isWin: boolean; depth: number; floors: number; eclats: number; rooms: number; g: GameState; live: Live | null; hurt: number; healed: number; killHealed: number; kills: number }
 
-export function playRun(seed: number, opts: { weapon?: WeaponId; mirror?: Record<string, number>; level?: number } = {}): BotResult {
+export function playRun(seed: number, opts: { weapon?: WeaponId; mirror?: Record<string, number>; level?: number; relics?: { effect: string; value: number }[] } = {}): BotResult {
   let g = fresh()
+  for (const [i, r] of (opts.relics ?? []).entries()) {
+    g.lineage.vault.push({ id: `bot${i}`, name: 'bot', effect: r.effect, value: r.value, origin: 'bot' } as never)
+    g.champion.equipped.push(`bot${i}`)
+  }
+  let hurt = 0
+  let healed = 0
+  let killHealed = 0
+  let kills = 0
   g.lineage.mirror = opts.mirror ?? {}
   g.champion.level = opts.level ?? 1
   if (opts.weapon) {
@@ -177,7 +185,13 @@ export function playRun(seed: number, opts: { weapon?: WeaponId; mirror?: Record
   for (let i = 0; i < 24 * 60 * 30 && live && g.run; i++) {
     t += dt
     if (g.run.offer) { g = menu(g, { k: 'pick', i: 0 }, NOW, seed + i); live.stats = combatStats(g); continue }
+    const before = live.player.hp
     step(live, botInput(live, t, g), dt)
+    const delta = live.player.hp - before
+    const killed = live.signals.filter(one => one.k === 'kill').length
+    kills += killed
+    if (delta < 0) hurt -= delta
+    else if (delta > 0) { healed += delta; if (killed > 0) killHealed += delta }
     while (live && live.signals.length > 0) {
       const sig = live.signals.shift()!
       const hp = Math.round(live.player.hp)
@@ -205,5 +219,5 @@ export function playRun(seed: number, opts: { weapon?: WeaponId; mirror?: Record
       live.wallet = g.run.eclats
     }
   }
-  return { isWin: g.epilogue[0]?.includes('VICTOIRE') ?? false, depth: g.run?.depth ?? -1, floors: (g.run?.biome ?? -1) + 1, eclats: g.lineage.eclats, rooms, g, live }
+  return { isWin: g.epilogue[0]?.includes('VICTOIRE') ?? false, depth: g.run?.depth ?? -1, floors: (g.run?.biome ?? -1) + 1, eclats: g.lineage.eclats, rooms, g, live, hurt, healed, killHealed, kills }
 }

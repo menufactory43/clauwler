@@ -302,8 +302,8 @@ export function onPlayerHit(live: Live, e: Enemy, dmg: number, isCrit: boolean) 
 export function onKill(live: Live, e: Enemy) {
   const fx = state(live)
   const s = live.stats
-  if (s.lifesteal > 0 && s.healToShield) {
-    const over = live.player.hp + s.lifesteal - s.maxHp
+  if (live.killGain > 0 && s.healToShield) {
+    const over = live.player.hp + live.killGain - s.maxHp
     if (over > 0) fx.shield = Math.min(shieldCap(s), fx.shield + over)
   }
   if (s.explodeOnKill > 0) fx.jobs.push({ k: 'nova', x: e.x, y: e.y, r: 20, dmg: s.explodeOnKill * s.dmg, color: C_BURN, poison: 0 })

@@ -235,6 +235,9 @@ export type RoomSpec = {
 
 export type Live = {
   t: number
+  /** What kills have healed in this room so far, and what the last kill healed. */
+  killHealed: number
+  killGain: number
   rng: number
   nextId: number
   biome: number
@@ -425,9 +428,9 @@ function rollWave(live: Live, n: number): EnemyType[] {
 
 function makeEnemy(live: Live, type: EnemyType, kind: EnemyKind, x: number, y: number, name?: string, sig?: string): Enemy {
   const def = ENEMY[type]
-  const scaleHp = 1 + live.depth * 0.06
+  const scaleHp = 1 + live.depth * 0.1
   const scaleDmg = 1 + live.depth * 0.06
-  const elite = kind === 'error' ? 1.4 : 1
+  const elite = kind === 'error' ? 1.8 : 1
   const hp = Math.round(def.hp * scaleHp * elite)
   return {
     id: live.nextId++, type, kind, name: name ?? NAMES[type], sig, x, y, r: def.r, hp, maxHp: hp,
@@ -528,7 +531,7 @@ let roomCount = Math.floor(Math.random() * 1e6)
 
 export function createRoom(spec: RoomSpec): Live {
   const live: Live = {
-    roomKey: ++roomCount,
+    roomKey: ++roomCount, killHealed: 0, killGain: 0,
     t: 0, rng: spec.seed | 0, nextId: 1, biome: spec.biome, depth: spec.depth, isBoss: spec.isBoss,
     weapon: spec.weapon, stats: spec.stats, scars: spec.scars, fortune: spec.fortune, wallet: spec.wallet ?? 0, aimX: 0, aimY: 0,
     player: {
@@ -736,12 +739,17 @@ function gibs(live: Live, e: Enemy, n: number) {
   if (live.fx.filter(f => f.kind === 'stain').length < 24) live.fx.push({ kind: 'stain', x: e.x, y: e.y, ttl: 9, max: 9, color: colors[colors.length > 2 ? 2 : 0]!, r: Math.min(8, e.r + 1) })
 }
 
+/** Kills heal at most this many times the per-kill heal in a room, and the adds a foe calls up heal nothing. */
+export const KILL_HEAL_ROOM = 2
+
 function killEnemy(live: Live, e: Enemy) {
+  const s = live.stats
+  live.killGain = e.kind === 'minion' ? 0 : Math.max(0, Math.min(s.lifesteal, s.lifesteal * KILL_HEAL_ROOM - live.killHealed))
+  live.killHealed += live.killGain
   FX.onKill(live, e) // build: explosions, spreading poison, familiars
   live.enemies = live.enemies.filter(one => one !== e)
   live.strikes = live.strikes.filter(s => !(s.from === e.id && s.isTied))
-  const s = live.stats
-  if (s.lifesteal > 0) live.player.hp = Math.min(s.maxHp, live.player.hp + s.lifesteal)
+  if (live.killGain > 0) live.player.hp = Math.min(s.maxHp, live.player.hp + live.killGain)
   const isBoss = e.type === 'boss'
   gibs(live, e, isBoss ? 26 : Math.min(12, 4 + e.r))
   sparks(live, e.x, e.y - 2, isBoss ? 16 : 6, e.kind === 'biome' || e.kind === 'minion' ? RED : ORANGE, 55)
@@ -1643,7 +1651,7 @@ function startAct(live: Live, e: Enemy) {
         for (const one of live.enemies) {
           if (one === e || one.hidden || dist(one.x, one.y, e.x, e.y) > 74) continue
           // A modest top-up of what was lost, not a third of the bar.
-          const heal = Math.min(one.maxHp - one.hp, Math.round(one.maxHp * 0.12))
+          const heal = Math.min(one.maxHp - one.hp, Math.round(one.maxHp * 0.3))
           if (heal <= 0) continue
           one.hp += heal
           one.buff = 4

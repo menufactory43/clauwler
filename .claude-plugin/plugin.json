@@ -1,0 +1,6 @@
+{
+  "name": "clauwler",
+  "version": "0.1.0",
+  "description": "Roguelike façon Hades dans un panneau : ta session Claude génère le donjon, ta lignée persiste entre sessions.",
+  "types": "./types/index.d.ts"
+}

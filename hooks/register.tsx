@@ -20,7 +20,7 @@ import { SIGNAL_SFX, gainOf, newMixer, pickSounds } from './sound'
 
 const PANE = 'clauwler'
 /** Shown in the pane, so a reload can be told from a stale module. */
-const BUILD = 'v1.5'
+const BUILD = 'v1.6'
 const FPS = 24
 const IDLE_MS = 8000
 const game = atom({ plugin: 'clauwler', key: 'game' } as const, null)
@@ -63,6 +63,13 @@ let needsFrame = true
 let cellsSize = ''
 /** Pictures sent to the terminal at most this often: each one is a PNG crossing the pty. */
 const PICTURE_MS = 1000 / 24 - 5
+/**
+ * When Claude Code itself is busy (a long answer streaming, a big tool result), the loop's
+ * ticks come late: the pictures then drop to 12 a second for a while, so the game keeps
+ * its pace instead of stuttering behind a queue of frames.
+ */
+const BUSY_PICTURE_MS = 1000 / 12 - 5
+let busyUntil = 0
 let lastPictureAt = 0
 let wasFocused = false
 let isLooping = false
@@ -448,7 +455,8 @@ async function tick($: EngineInterface) {
   perf.lastT = t
   if (t - perf.since > 2000) await flushPerf($, t)
   if (!needsFrame || isBlitting || !mirror || !live) return
-  if (gfx === 'image' && t - lastPictureAt < PICTURE_MS) return
+  if (dt > 0.065) busyUntil = t + 1500
+  if (gfx === 'image' && t - lastPictureAt < (t < busyUntil ? BUSY_PICTURE_MS : PICTURE_MS)) return
   lastPictureAt = t
   needsFrame = false
   const r0 = Date.now()

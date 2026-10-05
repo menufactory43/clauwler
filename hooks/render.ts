@@ -276,6 +276,7 @@ function drawRoom(b: Buf, live: Live) {
 
 let staticFor: Live | null = null
 let staticRes = 0
+let staticCleared = false
 let staticPx = new Uint8Array(0)
 
 const mix = (c: RGB, k: number, add = 0): RGB => [Math.max(0, Math.min(245, c[0] * k + add)), Math.max(0, Math.min(245, c[1] * k + add)), Math.max(0, Math.min(245, c[2] * k + add))]
@@ -364,11 +365,14 @@ function paintStatic(live: Live) {
 
 /** The room's textured layer, painted once, laid under the frame with the shake's offset. */
 function drawStatic(b: Buf, live: Live) {
-  if (staticFor !== live || staticRes !== S || staticPx.length !== RW * RH * 4) {
-    staticPx = new Uint8Array(RW * RH * 4)
+  if (staticFor !== live || staticRes !== S || staticCleared !== live.isCleared || staticPx.length !== RW * RH * 4) {
+    if (staticPx.length !== RW * RH * 4) staticPx = new Uint8Array(RW * RH * 4)
     staticFor = live
     staticRes = S
+    staticCleared = live.isCleared
     paintStatic(live)
+    // Barred doors never change: they go into the layer; open ones glow, drawn each frame.
+    if (!live.isCleared) drawDoors({ px: staticPx, ox: 0, oy: -FRAME_TOP }, live)
   }
   const dx = Math.round(b.ox * S)
   const dy = Math.round((b.oy + FRAME_TOP) * S)
@@ -428,15 +432,43 @@ let ambKey = ''
  * Multiplies the frame by an ambient dark and the lights' warm pools. The light
  * is worked out once a world pixel and spread over its fine ones.
  */
+/** Adds one light's pool to a light map of world cells. */
+function addLight(buf: Float32Array, L: Light, ox: number, oy: number, LW: number, LH: number) {
+  const lightBuf = buf
+  const cx = L.x + ox
+  const cy = L.y + oy
+  const R = L.r
+  const x0 = Math.max(0, Math.floor(cx - R))
+  const x1 = Math.min(LW - 1, Math.ceil(cx + R))
+  const y0 = Math.max(0, Math.floor(cy - R))
+  const y1 = Math.min(LH - 1, Math.ceil(cy + R))
+  const inv = 1 / (R * R)
+  for (let y = y0; y <= y1; y++) {
+    const dy2 = (y + 0.5 - cy) ** 2
+    for (let x = x0; x <= x1; x++) {
+      const d = ((x + 0.5 - cx) ** 2 + dy2) * inv
+      if (d >= 1) continue
+      const f = (1 - d) * (1 - d) * L.i
+      const k = (y * LW + x) * 3
+      lightBuf[k] = lightBuf[k]! + f * L.c[0]
+      lightBuf[k + 1] = lightBuf[k + 1]! + f * L.c[1]
+      lightBuf[k + 2] = lightBuf[k + 2]! + f * L.c[2]
+    }
+  }
+}
+
 function applyLight(b: Buf, live: Live, lights: Light[]) {
   const LW = Math.ceil(RW / S)
   const LH = Math.ceil(RH / S)
   const n = LW * LH * 3
-  const key = `${live.biome}:${LW}x${LH}`
+  // The ambient and the room's fixed lights (torches, the glow of open doors), worked out once.
+  const key = `${live.biome}:${LW}x${LH}:${roomId(live)}:${live.isCleared}`
   if (ambKey !== key) {
     ambKey = key
-    ambBuf = new Float32Array(n)
-    lightBuf = new Float32Array(n)
+    if (ambBuf.length !== n) {
+      ambBuf = new Float32Array(n)
+      lightBuf = new Float32Array(n)
+    }
     const amb: RGB = live.biome === 1 ? [0.42, 0.32, 0.3] : live.biome === 2 ? [0.28, 0.38, 0.4] : [0.32, 0.3, 0.42]
     // Ambient, darker toward the frame's edges.
     for (let y = 0; y < LH; y++) for (let x = 0; x < LW; x++) {
@@ -448,46 +480,27 @@ function applyLight(b: Buf, live: Live, lights: Light[]) {
       ambBuf[k + 1] = amb[1] * v
       ambBuf[k + 2] = amb[2] * v
     }
+    for (const L of fixedLights(live)) addLight(ambBuf, L, 0, -FRAME_TOP, LW, LH)
   }
   lightBuf.set(ambBuf)
-  for (const L of lights) {
-    const cx = L.x + b.ox
-    const cy = L.y + b.oy
-    const R = L.r
-    const x0 = Math.max(0, Math.floor(cx - R))
-    const x1 = Math.min(LW - 1, Math.ceil(cx + R))
-    const y0 = Math.max(0, Math.floor(cy - R))
-    const y1 = Math.min(LH - 1, Math.ceil(cy + R))
-    const inv = 1 / (R * R)
-    for (let y = y0; y <= y1; y++) {
-      const dy2 = (y + 0.5 - cy) ** 2
-      for (let x = x0; x <= x1; x++) {
-        const d = ((x + 0.5 - cx) ** 2 + dy2) * inv
-        if (d >= 1) continue
-        const f = (1 - d) * (1 - d) * L.i
-        const k = (y * LW + x) * 3
-        lightBuf[k] = lightBuf[k]! + f * L.c[0]
-        lightBuf[k + 1] = lightBuf[k + 1]! + f * L.c[1]
-        lightBuf[k + 2] = lightBuf[k + 2]! + f * L.c[2]
-      }
-    }
-  }
+  for (const L of lights) addLight(lightBuf, L, b.ox, b.oy, LW, LH)
+
   // Each world cell's three factors once, laid over its fine pixels; the clamped view caps at 255.
   const px = new Uint8ClampedArray(b.px.buffer, b.px.byteOffset, RW * RH * 4)
   for (let ly = 0; ly < LH; ly++) for (let lx = 0; lx < LW; lx++) {
     const k = (ly * LW + lx) * 3
     // In steps of 1/16: smooth enough to the eye, and the picture packs far smaller.
-    const fr = Math.round((lightBuf[k]! < 1.7 ? lightBuf[k]! : 1.7) * 16) / 16
-    const fg = Math.round((lightBuf[k + 1]! < 1.7 ? lightBuf[k + 1]! : 1.7) * 16) / 16
-    const fb = Math.round((lightBuf[k + 2]! < 1.7 ? lightBuf[k + 2]! : 1.7) * 16) / 16
+    const fr = (Math.min(1.7, lightBuf[k]!) * 16 + 0.5) | 0
+    const fg = (Math.min(1.7, lightBuf[k + 1]!) * 16 + 0.5) | 0
+    const fb = (Math.min(1.7, lightBuf[k + 2]!) * 16 + 0.5) | 0
     for (let j = 0; j < S; j++) {
       const y = ly * S + j
       if (y >= RH) break
       let i = (y * RW + lx * S) * 4
       for (let q = 0; q < S; q++, i += 4) {
-        px[i] = px[i]! * fr
-        px[i + 1] = px[i + 1]! * fg
-        px[i + 2] = px[i + 2]! * fb
+        px[i] = (px[i]! * fr) >> 4
+        px[i + 1] = (px[i + 1]! * fg) >> 4
+        px[i + 2] = (px[i + 2]! * fb) >> 4
       }
     }
   }
@@ -495,15 +508,22 @@ function applyLight(b: Buf, live: Live, lights: Light[]) {
 
 const KIND_GLOW: Record<string, RGB> = { treasure: [1, 0.9, 0.4], shop: [0.4, 0.9, 1], boss: [1, 0.35, 0.3], session: [1, 0.6, 0.25] }
 
+/** The lights that never move in a room: baked into its ambient. */
+function fixedLights(live: Live): Light[] {
+  const lights: Light[] = []
+  for (const x of torches(live)) lights.push({ x, y: ROOM.y0 - 4, r: 58, c: [1.25, 0.66, 0.26], i: 0.88 })
+  if (live.isCleared) for (const d of live.doors) lights.push({ x: d.x, y: d.y, r: 22, c: KIND_GLOW[d.kind] ?? [0.8, 0.7, 0.6], i: 0.7 })
+  return lights
+}
+
+const roomIds = new WeakMap<Live, number>()
+let nextRoomId = 1
+const roomId = (live: Live) => roomIds.get(live) ?? (roomIds.set(live, nextRoomId), nextRoomId++)
+
 function lightsOf(live: Live): Light[] {
   const lights: Light[] = []
   const p = live.player
   lights.push({ x: p.x, y: p.y - 5, r: 70, c: [1, 0.9, 0.78], i: 1 })
-  for (const [i, x] of torches(live).entries()) {
-    const f = 0.85 + 0.1 * Math.sin(live.t * 11 + i * 3) + 0.05 * Math.sin(live.t * 23 + i)
-    lights.push({ x, y: ROOM.y0 - 4, r: 58, c: [1.25, 0.66, 0.26], i: f })
-  }
-  if (live.isCleared) for (const d of live.doors) lights.push({ x: d.x, y: d.y, r: 22, c: KIND_GLOW[d.kind] ?? [0.8, 0.7, 0.6], i: 0.7 })
   for (const pr of live.projs) {
     if (pr.kind === 'bolt') lights.push({ x: pr.x, y: pr.y, r: 14, c: [0.4, 0.9, 1.2], i: 0.9 })
     else if (pr.kind === 'orb') lights.push({ x: pr.x, y: pr.y, r: 12, c: [1.2, 0.4, 0.3], i: 0.8 })
@@ -816,7 +836,10 @@ export function renderFrame(live: Live | null, view: View, frame: Uint8Array): U
   const hud = view.hasPixelHud ?? true
   VH = Math.min(FH, view.vh ?? FH)
   const b: Buf = { px: frame, ox: 0, oy: -top }
-  rect(b, 0, 0, FW, FH, P.k!)
+  if (S > 1 && frame.byteOffset % 4 === 0) {
+    // One word a pixel: opaque near-black (DB16's k) little-endian.
+    new Uint32Array(frame.buffer, frame.byteOffset, RW * RH).fill(0xff1c0c14)
+  } else rect(b, 0, 0, FW, FH, P.k!)
   if (!live) {
     drawSplash(b, view)
     return frame
@@ -832,7 +855,7 @@ export function renderFrame(live: Live | null, view: View, frame: Uint8Array): U
   }
   if (S > 1) {
     drawStatic(b, live)
-    drawDoors(b, live)
+    if (live.isCleared) drawDoors(b, live)
     drawTorches(b, live)
   } else drawRoom(b, live)
 

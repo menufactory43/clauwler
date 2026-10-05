@@ -212,6 +212,21 @@ const sumG = new Float64Array(32768)
 const sumB = new Float64Array(32768)
 const lut = new Uint8Array(32768)
 let indexRaw = new Uint8Array(0)
+const lutGen = new Int32Array(32768)
+let gen = 0
+let paletteGen = -1
+let paletteAge = 0
+let lastPalette: Uint8Array | null = null
+
+function nearest(palette: Uint8Array, r: number, g: number, b: number): number {
+  let best = 0
+  let bd = Infinity
+  for (let k = 0; k < palette.length; k += 3) {
+    const d = (palette[k]! - r) ** 2 + (palette[k + 1]! - g) ** 2 + (palette[k + 2]! - b) ** 2
+    if (d < bd) { bd = d; best = k / 3 }
+  }
+  return best
+}
 
 type Box = { cells: number[]; count: number; score: number; axis: number }
 
@@ -236,12 +251,11 @@ function boxOf(cells: number[]): Box {
  * The frame cut to its 256 likeliest colours (median cut over 15-bit buckets,
  * each colour the mean of what fell in it) and written as an indexed PNG.
  */
-export function encodeIndexedPng(rgba: Uint8Array, width: number, height: number): Uint8Array {
+function buildPalette(rgba: Uint8Array, n: number) {
   hist.fill(0)
   sumR.fill(0)
   sumG.fill(0)
   sumB.fill(0)
-  const n = width * height
   for (let i = 0, p = 0; p < n; p++, i += 4) {
     const r = rgba[i]!
     const g = rgba[i + 1]!
@@ -272,12 +286,15 @@ export function encodeIndexedPng(rgba: Uint8Array, width: number, height: number
     boxes.push(boxOf(box.cells.slice(cut)))
   }
   const palette = new Uint8Array(boxes.length * 3)
+  paletteGen = ++gen
+  paletteAge = 0
   boxes.forEach((box, k) => {
     let r = 0
     let g = 0
     let b = 0
     for (const c of box.cells) {
       lut[c] = k
+      lutGen[c] = paletteGen
       r += sumR[c]!
       g += sumG[c]!
       b += sumB[c]!
@@ -286,6 +303,40 @@ export function encodeIndexedPng(rgba: Uint8Array, width: number, height: number
     palette[k * 3 + 1] = Math.round(g / box.count)
     palette[k * 3 + 2] = Math.round(b / box.count)
   })
+  lastPalette = palette
+}
+
+export function encodeIndexedPng(rgba: Uint8Array, width: number, height: number): Uint8Array {
+  const n = width * height
+  // The last palette serves while the picture keeps to its colours: a frame is much like the one
+  // before. Colours it never saw get their nearest entry; too many of them, or every 16 frames, and
+  // the palette is cut afresh.
+  let isFresh = !lastPalette || ++paletteAge >= 16
+  if (!isFresh) {
+    gen++
+    let novel = 0
+    for (let i = 0; i < n * 4; i += 4) {
+      const c = ((rgba[i]! >> 3) << 10) | ((rgba[i + 1]! >> 3) << 5) | (rgba[i + 2]! >> 3)
+      if (lutGen[c] === paletteGen) continue
+      if (lutGen[c] !== gen) {
+        lutGen[c] = gen
+        novel++
+        if (novel > 96) break
+      }
+    }
+    if (novel > 96) isFresh = true
+    else {
+      // Give each unseen colour its nearest entry, then mark it as the palette's own.
+      for (let i = 0; i < n * 4; i += 4) {
+        const c = ((rgba[i]! >> 3) << 10) | ((rgba[i + 1]! >> 3) << 5) | (rgba[i + 2]! >> 3)
+        if (lutGen[c] === paletteGen) continue
+        lut[c] = nearest(lastPalette!, rgba[i]!, rgba[i + 1]!, rgba[i + 2]!)
+        lutGen[c] = paletteGen
+      }
+    }
+  }
+  if (isFresh) buildPalette(rgba, n)
+  const palette = lastPalette!
   const stride = width + 1
   const rawLen = stride * height
   if (indexRaw.length < rawLen) indexRaw = new Uint8Array(rawLen)

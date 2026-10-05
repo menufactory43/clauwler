@@ -425,9 +425,9 @@ function rollWave(live: Live, n: number): EnemyType[] {
 
 function makeEnemy(live: Live, type: EnemyType, kind: EnemyKind, x: number, y: number, name?: string, sig?: string): Enemy {
   const def = ENEMY[type]
-  const scaleHp = 1 + live.depth * 0.1
+  const scaleHp = 1 + live.depth * 0.06
   const scaleDmg = 1 + live.depth * 0.06
-  const elite = kind === 'error' ? 1.8 : 1
+  const elite = kind === 'error' ? 1.4 : 1
   const hp = Math.round(def.hp * scaleHp * elite)
   return {
     id: live.nextId++, type, kind, name: name ?? NAMES[type], sig, x, y, r: def.r, hp, maxHp: hp,
@@ -1642,8 +1642,10 @@ function startAct(live: Live, e: Enemy) {
       if (e.pattern === 1) {
         for (const one of live.enemies) {
           if (one === e || one.hidden || dist(one.x, one.y, e.x, e.y) > 74) continue
-          const heal = Math.round(one.maxHp * 0.3)
-          one.hp = Math.min(one.maxHp, one.hp + heal)
+          // A modest top-up of what was lost, not a third of the bar.
+          const heal = Math.min(one.maxHp - one.hp, Math.round(one.maxHp * 0.12))
+          if (heal <= 0) continue
+          one.hp += heal
           one.buff = 4
           live.fx.push({ kind: 'ring', x: one.x, y: one.y - 2, ttl: 0.4, max: 0.4, color: GREEN, r: one.r + 4 })
           num(live, one.x, one.y - one.r - 6, `+${heal}`, GREEN)

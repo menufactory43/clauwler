@@ -21,7 +21,7 @@ import { getLang, langFromEnv, setLang, tr } from './i18n'
 
 const PANE = 'clauwler'
 /** Shown in the pane, so a reload can be told from a stale module. */
-const BUILD = 'v2.2'
+const BUILD = 'v2.3'
 const FPS = 30
 const IDLE_MS = 8000
 const game = atom({ plugin: 'clauwler', key: 'game' } as const, null)

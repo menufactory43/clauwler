@@ -21,8 +21,8 @@ import { getLang, langFromEnv, setLang, tr } from './i18n'
 
 const PANE = 'clauwler'
 /** Shown in the pane, so a reload can be told from a stale module. */
-const BUILD = 'v2.0'
-const FPS = 24
+const BUILD = 'v2.2'
+const FPS = 30
 const IDLE_MS = 8000
 const game = atom({ plugin: 'clauwler', key: 'game' } as const, null)
 const hudAtom = atom({ plugin: 'clauwler', key: 'hud' } as const, null)
@@ -61,12 +61,17 @@ let isHandling = false
 let lastTick = 0
 let lastInputAt = 0
 let needsFrame = true
+/**
+ * The picture process (helper/engine.mjs, run by Node): it draws and packs the frames on its
+ * own core, the terminal reading each PNG from disk. Absent (no Node), the mod draws them itself.
+ */
+const helper = { dir: '', isReady: false, isStarting: false, gen: 0, shownGen: 0, path: '', ms: 0, frames: 0, fails: 0 }
 let cellsSize = ''
 /** Pictures sent to the terminal at most this often: each one is a PNG crossing the pty. */
 /** Pictures a second, picked with V: the terminal, not the game, decides what it can show. */
-const PICTURE_RATES = [24, 15, 10]
-let pictureRate = 24
-let PICTURE_MS = 1000 / 24 - 5
+const PICTURE_RATES = [30, 24, 15]
+let pictureRate = 30
+let PICTURE_MS = 1000 / 30 - 4
 /**
  * When Claude Code itself is busy (a long answer streaming, a big tool result), the loop's
  * ticks come late: the pictures then drop to 12 a second for a while, so the game keeps
@@ -327,11 +332,12 @@ async function start($: EngineInterface, isOpening: boolean) {
   const program = (await $.env.get('TERM_PROGRAM').catch(() => undefined)) ?? ''
   const canPicture = term === 'xterm-ghostty' || term.includes('kitty') || /^(ghostty|WezTerm)$/i.test(program)
   if (!hasStarted) gfx = canPicture ? 'image' : saved === 'half' ? 'half' : 'quads'
-  const savedRate = await $.store.get('pictureRate')
+  const savedRate = await $.store.get('pictureRate30')
   if (typeof savedRate === 'number' && PICTURE_RATES.includes(savedRate)) {
     pictureRate = savedRate
-    PICTURE_MS = 1000 / pictureRate - 5
+    PICTURE_MS = 1000 / pictureRate - 4
   }
+  if (gfx === 'image') void startHelper($, sessionId)
   cellAspect = /ghostty/i.test(program) || term === 'xterm-ghostty' ? 2.15 : 2.2
   hasStarted = true
   const stored = await read($, game)
@@ -430,11 +436,57 @@ const perf = { frozen: 0, slowed: 0, foes: 0, since: 0, lastT: 0, ticks: 0, tick
 async function flushPerf($: EngineInterface, t: number) {
   const secs = (t - perf.since) / 1000
   const n = Math.max(1, perf.blits)
-  perf.lines.push(`${new Date(t).toISOString().slice(11, 19)} ${gfx} ticks/s ${(perf.ticks / secs).toFixed(1)} maxGap ${perf.tickGap}ms pictures/s ${(perf.blits / secs).toFixed(1)} render ${(perf.render / n).toFixed(1)}ms encode ${(perf.encode / n).toFixed(1)}ms blit ${(perf.blit / n).toFixed(1)}ms ${Math.round(perf.bytes / n / 1024)}KB paneDraws/s ${(perf.panes / secs).toFixed(1)} keys/s ${(keysSeen / secs).toFixed(1)} foes ${perf.foes} frozen ${Math.round((100 * perf.frozen) / Math.max(1, perf.ticks))}% slowed ${Math.round((100 * perf.slowed) / Math.max(1, perf.ticks))}% repeat ${Math.round(initialMs)}/${Math.round(repeatMs)}ms ${paneInfo} ${BUILD}`)
+  perf.lines.push(`${new Date(t).toISOString().slice(11, 19)} ${gfx} ticks/s ${(perf.ticks / secs).toFixed(1)} maxGap ${perf.tickGap}ms pictures/s ${(perf.blits / secs).toFixed(1)} render ${(perf.render / n).toFixed(1)}ms encode ${(perf.encode / n).toFixed(1)}ms blit ${(perf.blit / n).toFixed(1)}ms ${Math.round(perf.bytes / n / 1024)}KB paneDraws/s ${(perf.panes / secs).toFixed(1)} helper ${helper.isReady ? `${(helper.frames / secs).toFixed(1)}f/s ${(helper.ms / Math.max(1, helper.frames)).toFixed(1)}ms` : 'off'} keys/s ${(keysSeen / secs).toFixed(1)} foes ${perf.foes} frozen ${Math.round((100 * perf.frozen) / Math.max(1, perf.ticks))}% slowed ${Math.round((100 * perf.slowed) / Math.max(1, perf.ticks))}% repeat ${Math.round(initialMs)}/${Math.round(repeatMs)}ms ${paneInfo} ${BUILD}`)
   perf.lines = perf.lines.slice(-60)
   keysSeen = 0
+  helper.frames = 0
+  helper.ms = 0
   Object.assign(perf, { frozen: 0, slowed: 0, foes: 0, since: t, ticks: 0, tickGap: 0, blits: 0, render: 0, encode: 0, blit: 0, bytes: 0, panes: 0 })
   if (perfPath) await $.fs.write(perfPath, perf.lines.join('\n') + '\n').catch(() => undefined)
+}
+
+/** Starts the picture process once Node answers; its frames are shown as they come. */
+async function startHelper($: EngineInterface, sessionId: string) {
+  if (helper.isReady || helper.isStarting) return
+  helper.isStarting = true
+  try {
+    const node = await $.process.run(['node', '--version'], { timeoutMs: 3000 })
+    if (node.exitCode !== 0) return
+  } catch {
+    helper.isStarting = false
+    return
+  }
+  helper.dir = `/tmp/clauwler-${sessionId.slice(0, 8)}`
+  void (async () => {
+    try {
+      const child = $.process.spawn({ argv: ['node', `${$.plugin.root}/helper/engine.mjs`, helper.dir] })
+      let rest = ''
+      for await (const piece of child) {
+        if (piece.stream !== 'stdout') continue
+        rest += piece.text
+        const lines = rest.split('\n')
+        rest = lines.pop() ?? ''
+        for (const line of lines) {
+          if (line.startsWith('READY')) helper.isReady = true
+          else if (line.startsWith('F ')) {
+            const [, gen, path, ms] = line.split(' ')
+            const g = Number(gen)
+            if (!path || g <= helper.shownGen) continue
+            helper.shownGen = g
+            helper.path = path
+            helper.ms += Number(ms) || 0
+            helper.frames++
+            void $.ui.blit({ requestId: PANE, key: 'arena', source: { file: path, format: 'png', generation: g } }).catch(() => undefined)
+          }
+        }
+      }
+    } catch {
+      // The process could not run: the mod draws the frames itself.
+    }
+    helper.isReady = false
+    helper.isStarting = false
+    helper.path = ''
+  })()
 }
 
 async function tick($: EngineInterface) {
@@ -500,9 +552,22 @@ async function tick($: EngineInterface) {
   // Busy only when the ticks keep coming late (a second's average), not on one late tick.
   lateAvg = lateAvg * 0.92 + dt * 0.08
   if (lateAvg > 0.06) busyUntil = t + 1500
-  if (gfx === 'image' && t - lastPictureAt < Math.max(PICTURE_MS, t < busyUntil ? BUSY_PICTURE_MS : 0)) return
+  if (gfx === 'image' && t - lastPictureAt < Math.max(helper.isReady ? PICTURE_MS : Math.max(PICTURE_MS, 1000 / 24 - 5), t < busyUntil ? BUSY_PICTURE_MS : 0)) return
   lastPictureAt = t
   needsFrame = false
+  if (gfx === 'image' && helper.isReady) {
+    // Hand the room to the picture process; the frame comes back on its stdout.
+    const s0 = Date.now()
+    helper.gen++
+    try {
+      await $.fs.write(`${helper.dir}/state.json`, JSON.stringify({ gen: helper.gen, live, view: viewOf(mirror) }))
+    } catch {
+      helper.fails++
+    }
+    perf.render += Date.now() - s0
+    perf.blits++
+    return
+  }
   const r0 = Date.now()
   renderFrame(live, viewOf(mirror), gfx === 'image' ? fineFrame : frame)
   perf.render += Date.now() - r0
@@ -622,8 +687,8 @@ async function handleKey($: EngineInterface, key: string) {
   }
   if (key === 'v' && g.mode === 'run') {
     pictureRate = PICTURE_RATES[(PICTURE_RATES.indexOf(pictureRate) + 1) % PICTURE_RATES.length] ?? 24
-    PICTURE_MS = 1000 / pictureRate - 5
-    await $.store.set('pictureRate', pictureRate)
+    PICTURE_MS = 1000 / pictureRate - 4
+    await $.store.set('pictureRate30', pictureRate)
     await change($, s => ({ ...s }))
     return
   }
@@ -1022,7 +1087,7 @@ export const register: Register = on => {
         const { Image, Raster } = $.ui.resolve(e)
         if (gfx === 'image') {
           // The picture the loop last sent: a redraw of the pane (the HUD changing) sends nothing new.
-          if (!frameB64) {
+          if (!frameB64 && !helper.path) {
             renderFrame(live, viewOf(g), fineFrame)
             frameB64 = toBase64(encodeIndexedPng(fineFrame, FINE_SIZE.width, FINE_SIZE.height))
           }
@@ -1037,7 +1102,7 @@ export const register: Register = on => {
           // Rows the arena leaves free: the map and the log fill them when there are enough.
           spareBelow = bodyRows - fitRows - 4
           paneInfo = `arena ${fitCols}x${fitRows} pane ${e.props.placement} body ${e.props.bodyColumns}x${scrollRows} viewport ${e.viewport?.columns}x${e.viewport?.rows}`
-          arena = <Box justifyContent="center"><Image key="arena" source={{ png: frameB64 }} columns={fitCols} rows={fitRows} alt={tr("Pas d'image dans ce terminal.", 'No pictures in this terminal.')} /></Box>
+          arena = <Box justifyContent="center"><Image key="arena" source={helper.path ? { file: helper.path, format: 'png', generation: helper.shownGen } : { png: frameB64 }} columns={fitCols} rows={fitRows} alt={tr("Pas d'image dans ce terminal.", 'No pictures in this terminal.')} /></Box>
         } else {
           const spare = (e.viewport?.rows ?? 40) - 16
           if (gfx === 'quads') {

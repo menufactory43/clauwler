@@ -287,6 +287,8 @@ export type Live = {
   isDead: boolean
   shake: number
   hitstop: number
+  /** A number for this room alone: the picture process caches the room's layer by it. */
+  roomKey?: number
   /** When the world last froze or slowed, so the beats stay rare. */
   lastFreezeAt?: number
   lastSlowAt?: number
@@ -522,8 +524,11 @@ const GREEN: RGB = [109, 170, 44]
 
 // ---------- room ----------
 
+let roomCount = Math.floor(Math.random() * 1e6)
+
 export function createRoom(spec: RoomSpec): Live {
   const live: Live = {
+    roomKey: ++roomCount,
     t: 0, rng: spec.seed | 0, nextId: 1, biome: spec.biome, depth: spec.depth, isBoss: spec.isBoss,
     weapon: spec.weapon, stats: spec.stats, scars: spec.scars, fortune: spec.fortune, wallet: spec.wallet ?? 0, aimX: 0, aimY: 0,
     player: {
@@ -710,7 +715,7 @@ function damageEnemy(live: Live, e: Enemy, amount: number, isCrit: boolean, kx: 
   e.kbx = (e.kbx ?? 0) + kx * heft * 12
   e.kby = (e.kby ?? 0) + ky * heft * 12
   // Only crits freeze, and not twice in a row: a crowd hit every tick would stutter the game.
-  if (isCrit) freeze(live, 0.05)
+  if (isCrit && live.enemies.length <= 6) freeze(live, 0.04)
   if (isCrit) live.shake = Math.max(live.shake, 0.14)
   sfx(live, isCrit ? 'crit' : 'hit')
   num(live, e.x + (rnd(live) - 0.5) * 6, e.y - e.r - 5, isCrit ? `${dmg}!` : `${dmg}`, isCrit ? YELLOW : [222, 238, 214], isCrit)
@@ -2083,11 +2088,11 @@ function updateFx(live: Live, dt: number) {
 }
 
 /**
- * Freezes the world for a beat, at most once every 0.4 s unless `isMajor` (a guardian's
+ * Freezes the world for a beat, at most once every 0.8 s unless `isMajor` (a guardian's
  * death, a phase change): many small freezes read as a game that stutters.
  */
 function freeze(live: Live, secs: number, isMajor = false) {
-  if (!isMajor && live.t - (live.lastFreezeAt ?? -9) < 0.4) return
+  if (!isMajor && live.t - (live.lastFreezeAt ?? -9) < 0.8) return
   live.hitstop = Math.max(live.hitstop, secs)
   live.lastFreezeAt = live.t
 }

@@ -83,7 +83,7 @@ test('V sets the picture rate in a run and still opens the Vault in the Hall', a
   await boot($, on, 'xterm-ghostty', 'fr_FR.UTF-8')
   const ui = await $.ui.mount({ plugin: 'clauwler', surface: 'terminal', ...pane(true, 120) } as never) as any
   await ui.press({ key: 'p-v' })
-  expect(await ui.find({ text: /15 i\/s/ })).toBeDefined()
+  expect(await ui.find({ text: /24 i\/s/ })).toBeDefined()
   await ui.press({ key: 'p-h' })
   await ui.press({ key: 'k-v' })
   expect(await ui.find({ text: /Coffre|Vault/ })).toBeDefined()

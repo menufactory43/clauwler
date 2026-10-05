@@ -275,7 +275,7 @@ function drawRoom(b: Buf, live: Live) {
 
 // ---------- the fine room: textured once per room, lit every frame ----------
 
-let staticFor: Live | null = null
+let staticFor: unknown = null
 let staticRes = 0
 let staticCleared = false
 let staticPx = new Uint8Array(0)
@@ -366,9 +366,9 @@ function paintStatic(live: Live) {
 
 /** The room's textured layer, painted once, laid under the frame with the shake's offset. */
 function drawStatic(b: Buf, live: Live) {
-  if (staticFor !== live || staticRes !== S || staticPx.length !== RW * RH * 4) {
+  if (staticFor !== roomKeyOf(live) || staticRes !== S || staticPx.length !== RW * RH * 4) {
     if (staticPx.length !== RW * RH * 4) staticPx = new Uint8Array(RW * RH * 4)
-    staticFor = live
+    staticFor = roomKeyOf(live)
     staticRes = S
     staticCleared = live.isCleared
     paintStatic(live)
@@ -519,7 +519,9 @@ function fixedLights(live: Live): Light[] {
 
 const roomIds = new WeakMap<Live, number>()
 let nextRoomId = 1
-const roomId = (live: Live) => roomIds.get(live) ?? (roomIds.set(live, nextRoomId), nextRoomId++)
+const roomId = (live: Live) => live.roomKey ?? roomIds.get(live) ?? (roomIds.set(live, nextRoomId), nextRoomId++)
+/** What tells one room from the next: its key when the frame is drawn from a copy (the picture process). */
+const roomKeyOf = (live: Live): unknown => live.roomKey ?? live
 
 function lightsOf(live: Live): Light[] {
   const lights: Light[] = []

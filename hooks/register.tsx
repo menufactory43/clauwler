@@ -20,7 +20,7 @@ import { SIGNAL_SFX, gainOf, newMixer, pickSounds } from './sound'
 
 const PANE = 'clauwler'
 /** Shown in the pane, so a reload can be told from a stale module. */
-const BUILD = 'v1.6'
+const BUILD = 'v1.7'
 const FPS = 24
 const IDLE_MS = 8000
 const game = atom({ plugin: 'clauwler', key: 'game' } as const, null)
@@ -62,7 +62,10 @@ let lastInputAt = 0
 let needsFrame = true
 let cellsSize = ''
 /** Pictures sent to the terminal at most this often: each one is a PNG crossing the pty. */
-const PICTURE_MS = 1000 / 24 - 5
+/** Pictures a second, picked with V: the terminal, not the game, decides what it can show. */
+const PICTURE_RATES = [24, 15, 10]
+let pictureRate = 24
+let PICTURE_MS = 1000 / 24 - 5
 /**
  * When Claude Code itself is busy (a long answer streaming, a big tool result), the loop's
  * ticks come late: the pictures then drop to 12 a second for a while, so the game keeps
@@ -294,6 +297,11 @@ async function start($: EngineInterface, isOpening: boolean) {
   const program = (await $.env.get('TERM_PROGRAM').catch(() => undefined)) ?? ''
   const canPicture = term === 'xterm-ghostty' || term.includes('kitty') || /^(ghostty|WezTerm)$/i.test(program)
   if (!hasStarted) gfx = canPicture ? 'image' : saved === 'half' ? 'half' : 'quads'
+  const savedRate = await $.store.get('pictureRate')
+  if (typeof savedRate === 'number' && PICTURE_RATES.includes(savedRate)) {
+    pictureRate = savedRate
+    PICTURE_MS = 1000 / pictureRate - 5
+  }
   cellAspect = /ghostty/i.test(program) || term === 'xterm-ghostty' ? 2.15 : 2.2
   hasStarted = true
   const stored = await read($, game)
@@ -456,7 +464,7 @@ async function tick($: EngineInterface) {
   if (t - perf.since > 2000) await flushPerf($, t)
   if (!needsFrame || isBlitting || !mirror || !live) return
   if (dt > 0.065) busyUntil = t + 1500
-  if (gfx === 'image' && t - lastPictureAt < (t < busyUntil ? BUSY_PICTURE_MS : PICTURE_MS)) return
+  if (gfx === 'image' && t - lastPictureAt < Math.max(PICTURE_MS, t < busyUntil ? BUSY_PICTURE_MS : 0)) return
   lastPictureAt = t
   needsFrame = false
   const r0 = Date.now()
@@ -573,6 +581,13 @@ async function handleKey($: EngineInterface, key: string) {
       queueSfx('menu')
       flushSfx($, t, true)
     }
+    await change($, s => ({ ...s }))
+    return
+  }
+  if (key === 'v') {
+    pictureRate = PICTURE_RATES[(PICTURE_RATES.indexOf(pictureRate) + 1) % PICTURE_RATES.length] ?? 24
+    PICTURE_MS = 1000 / pictureRate - 5
+    await $.store.set('pictureRate', pictureRate)
     await change($, s => ({ ...s }))
     return
   }
@@ -994,7 +1009,7 @@ export const register: Register = on => {
               ? <Text bold color="#dad45e" wrap="truncate-end">{hud.banner}</Text>
               : <Text> </Text>
       const shield = Math.floor(live?.effects?.shield ?? 0)
-      const runPad: [string, string][] = [['z', '↑'], ['q', '←'], ['s', '↓'], ['d', '→'], ['e', 'esquive'], ['r', 'pouvoir'], ['p', 'pause'], ['h', 'camp'], ['x', 'son']]
+      const runPad: [string, string][] = [['z', '↑'], ['q', '←'], ['s', '↓'], ['d', '→'], ['e', 'esquive'], ['r', 'pouvoir'], ['p', 'pause'], ['h', 'camp'], ['x', 'son'], ['v', `${pictureRate} i/s`]]
       return (
         <Box flexDirection="column">
           {hud ? (

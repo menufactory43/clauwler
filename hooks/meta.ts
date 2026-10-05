@@ -5,9 +5,10 @@ import type {
 import type { BoonDef, CombatStats } from './data'
 import {
   ASPECTS, BOONS, BOSSES, CLASSES, DEFAULT_BIOMES, DEFAULT_CHAMBERS, DUO_BOONS, DUO_RARITY, ERROR_EPITHETS, ERROR_NAMES,
-  GOD_BOONS, GOD_STATUS, ITEMS, ITEM_RARITY, MIRROR, RARITY, RELIC_EFFECTS, SLOT_LABEL, WEAPONS, applyRelic, baseStats,
-  boonValue, championName, hash, relicLabel,
+  GOD_BOONS, ITEMS, ITEM_RARITY, MIRROR, RARITY, RELIC_EFFECTS, SLOT_LABEL, WEAPONS, applyRelic, baseStats,
+  boonValue, championName, godStatus, hash, relicLabel,
 } from './data'
+import { tr } from './i18n'
 import type { BossSpec, RoomSpec } from './sim'
 
 export const BIOMES = 3
@@ -51,7 +52,7 @@ export function newChampion(ctx: Ctx, cls: ClassId): Champion {
 
 export function championTitle(c: Champion): string {
   const label = CLASSES[c.cls].label
-  return `${c.name} ${/^[AEIOUÉ]/.test(label) ? "l'" : 'le '}${label}`
+  return tr(`${c.name} ${/^[AEIOUÉ]/.test(label) ? "l'" : 'le '}${label}`, `${c.name} the ${label}`)
 }
 
 export const xpToLevel = (level: number) => 10 + level * 8
@@ -170,21 +171,21 @@ export function boot(input: BootInput): GameState {
     isPaused: true,
   }
   if (!input.champion) {
-    notice(g, `Un nouveau champion s'éveille pour ${input.ctx.repoName} : ${championTitle(g.champion)}.`)
-    chronicle(g, input.now, `${championTitle(g.champion)} prête serment au dépôt ${input.ctx.repoName}.`)
+    notice(g, tr(`Un nouveau champion s'éveille pour ${input.ctx.repoName} : ${championTitle(g.champion)}.`, `A new champion awakens for ${input.ctx.repoName}: ${championTitle(g.champion)}.`))
+    chronicle(g, input.now, tr(`${championTitle(g.champion)} prête serment au dépôt ${input.ctx.repoName}.`, `${championTitle(g.champion)} swears an oath to the ${input.ctx.repoName} repo.`))
   }
   const save = input.save
   const saved = save?.run && save.run.version === 3 ? save.run : null
   if (save && save.sessionId !== input.sessionId) {
     if (!save.isEnded) {
       settleNemeses(g, save.feed)
-      if (saved) chronicle(g, input.now, `${championTitle(g.champion)} s'est perdu dans « ${roomName(saved)} ».`)
+      if (saved) chronicle(g, input.now, tr(`${championTitle(g.champion)} s'est perdu dans « ${roomName(saved)} ».`, `${championTitle(g.champion)} got lost in "${roomName(saved)}".`))
     }
     g.run = saved
     if (g.run) {
       notice(g, save.isEnded
-        ? `Campement trouvé : ${g.run.biomeName}, « ${roomName(g.run)} ». [r] pour reprendre.`
-        : `Ton champion s'était perdu dans « ${roomName(g.run)} ». Il t'attend. [r] pour reprendre.`)
+        ? tr(`Campement trouvé : ${g.run.biomeName}, « ${roomName(g.run)} ». [r] pour reprendre.`, `Camp found: ${g.run.biomeName}, "${roomName(g.run)}". [r] to resume.`)
+        : tr(`Ton champion s'était perdu dans « ${roomName(g.run)} ». Il t'attend. [r] pour reprendre.`, `Your champion got lost in "${roomName(g.run)}". They are waiting for you. [r] to resume.`))
     }
   } else if (save && save.sessionId === input.sessionId) {
     g.run = saved
@@ -198,9 +199,9 @@ export function endSession(state: GameState, now: string): GameState {
   settleNemeses(g, g.feed)
   const f = g.feed
   if (g.run) {
-    chronicle(g, now, `${championTitle(g.champion)} dressa le camp dans « ${roomName(g.run)} » (${g.run.biomeName}).`)
+    chronicle(g, now, tr(`${championTitle(g.champion)} dressa le camp dans « ${roomName(g.run)} » (${g.run.biomeName}).`, `${championTitle(g.champion)} made camp in "${roomName(g.run)}" (${g.run.biomeName}).`))
   } else if (f.reads + f.edits + f.fails + f.tests > 0) {
-    chronicle(g, now, `Session calme : ${f.edits} runes gravées, ${f.fails} créatures nées, ${f.commits} sceaux posés.`)
+    chronicle(g, now, tr(`Session calme : ${f.edits} runes gravées, ${f.fails} créatures nées, ${f.commits} sceaux posés.`, `A quiet session: ${f.edits} runes carved, ${f.fails} creatures born, ${f.commits} seals set.`))
   }
   if (g.mode === 'run') g.mode = 'hall'
   return g
@@ -219,11 +220,11 @@ function settleNemeses(g: GameState, feed: Feed) {
     const known = g.champion.nemeses.find(n => n.sig === spawn.sig)
     if (known) {
       known.rank = Math.min(known.rank + 1, 9)
-      notice(g, `☠ ${known.name} a survécu. Il monte au rang ${known.rank}.`)
+      notice(g, tr(`☠ ${known.name} a survécu. Il monte au rang ${known.rank}.`, `☠ ${known.name} survived. It climbs to rank ${known.rank}.`))
     } else {
       const nemesis: Nemesis = { sig: spawn.sig, name: spawn.name, glyph: spawn.sig.charAt(0).toUpperCase(), rank: 1 }
       g.champion.nemeses.push(nemesis)
-      notice(g, `☠ ${nemesis.name} rôde désormais dans ce dépôt (Némésis rang 1).`)
+      notice(g, tr(`☠ ${nemesis.name} rôde désormais dans ce dépôt (Némésis rang 1).`, `☠ ${nemesis.name} now prowls this repo (Nemesis rank 1).`))
     }
   }
   g.champion.nemeses = g.champion.nemeses.sort((a, b) => b.rank - a.rank).slice(0, 5)
@@ -251,7 +252,7 @@ export function applyEvent(state: GameState, ev: SessionEvent, now: string, isLi
         f.runeCharge = 0
         if (run) {
           run.offerQueue += 1
-          say(run, '✦ Les runes gravées par Claude crépitent : un bienfait t\'attend à la fin de la salle.')
+          say(run, tr('✦ Les runes gravées par Claude crépitent : un bienfait t\'attend à la fin de la salle.', '✦ The runes Claude carved crackle: a boon awaits you at the end of the room.'))
         } else f.runeOffers += 1
       }
       break
@@ -281,11 +282,11 @@ export function applyEvent(state: GameState, ev: SessionEvent, now: string, isLi
       f.seals += 1
       if (f.seals >= SEALS_PER_RELIC) {
         f.seals = 0
-        const relic = forgeRelic(g, `Sceau de « ${ev.message} »`, `commit sur ${g.ctx.repoName}`, hash(ev.message + now))
-        const line = `⚒ Trois sceaux réunis : la relique « ${relic.name} » est forgée (${relicLabel(relic.effect, relic.value)}).`
+        const relic = forgeRelic(g, tr(`Sceau de « ${ev.message} »`, `Seal of "${ev.message}"`), tr(`commit sur ${g.ctx.repoName}`, `commit on ${g.ctx.repoName}`), hash(ev.message + now))
+        const line = tr(`⚒ Trois sceaux réunis : la relique « ${relic.name} » est forgée (${relicLabel(relic.effect, relic.value)}).`, `⚒ Three seals joined: the relic "${relic.name}" is forged (${relicLabel(relic.effect, relic.value)}).`)
         if (run) say(run, line)
         notice(g, line)
-      } else if (run) say(run, `🔏 Sceau de commit posé (${f.seals}/${SEALS_PER_RELIC}).`)
+      } else if (run) say(run, tr(`🔏 Sceau de commit posé (${f.seals}/${SEALS_PER_RELIC}).`, `🔏 Commit seal set (${f.seals}/${SEALS_PER_RELIC}).`))
       break
     }
   }
@@ -315,7 +316,7 @@ const STEPS: Record<Side, [number, number]> = { n: [0, -1], s: [0, 1], e: [1, 0]
 const OPPOSITE: Record<Side, Side> = { n: 's', s: 'n', e: 'w', w: 'e' }
 
 export function roomName(run: RunProgress): string {
-  return run.floor[run.cur]?.name ?? 'Salle sans nom'
+  return run.floor[run.cur]?.name ?? tr('Salle sans nom', 'Unnamed Room')
 }
 
 /** The rooms next to one, by the side their door is on. */
@@ -338,8 +339,8 @@ function biomeNameFor(g: GameState, biome: number): string {
     if (top && !dirs.includes(top)) dirs.push(top)
   }
   const dir = dirs[biome]
-  if (!dir) return DEFAULT_BIOMES[biome] ?? `Profondeur ${biome + 1}`
-  return ['Les Galeries de ', 'Les Cryptes de ', 'Le Sanctuaire de '][biome] + dir
+  if (!dir) return DEFAULT_BIOMES[biome] ?? tr(`Profondeur ${biome + 1}`, `Depth ${biome + 1}`)
+  return (tr('Les Galeries de |Les Cryptes de |Le Sanctuaire de ', 'The Galleries of |The Crypts of |The Sanctum of ').split('|')[biome] ?? '') + dir
 }
 
 /**
@@ -389,7 +390,7 @@ export function genFloor(g: GameState, biome: number, seed: number, biomeName: s
     }
     return cells.map((c, i) => {
       const kind = kinds[i]!
-      const name = kind === 'boss' ? 'Antre du Gardien' : kind === 'treasure' ? 'Salle du Trésor' : kind === 'shop' ? 'La Boutique' : kind === 'session' ? 'Salle des Erreurs' : kind === 'start' ? biomeName
+      const name = kind === 'boss' ? tr('Antre du Gardien', "Guardian's Lair") : kind === 'treasure' ? tr('Salle du Trésor', 'Treasure Room') : kind === 'shop' ? tr('La Boutique', 'The Shop') : kind === 'session' ? tr('Salle des Erreurs', 'Hall of Errors') : kind === 'start' ? biomeName
         : (files.length ? files[Math.floor(roll() * files.length)]! : DEFAULT_CHAMBERS[Math.floor(roll() * DEFAULT_CHAMBERS.length)]!)
       return {
         x: c.x, y: c.y, kind, name,
@@ -399,7 +400,7 @@ export function genFloor(g: GameState, biome: number, seed: number, biomeName: s
       }
     })
   }
-  return [{ x: 0, y: 0, kind: 'boss', name: 'Antre du Gardien', isCleared: false, isSeen: true, isVisited: true, loot: [] }]
+  return [{ x: 0, y: 0, kind: 'boss', name: tr('Antre du Gardien', "Guardian's Lair"), isCleared: false, isSeen: true, isVisited: true, loot: [] }]
 }
 
 function reveal(run: RunProgress) {
@@ -437,7 +438,10 @@ export function startRun(state: GameState, seed: number, now: string): GameState
   newFloor(g, run)
   const w = WEAPONS.find(one => one.id === run.weapon)
   const aspect = ASPECTS.find(one => one.id === run.aspect)
-  say(run, `${championTitle(g.champion)} descend dans le donjon de ${g.ctx.repoName}, ${w?.title.toLowerCase()} « ${w?.name} » en main${aspect ? ` (${aspect.name})` : ''}.`)
+  say(run, tr(
+    `${championTitle(g.champion)} descend dans le donjon de ${g.ctx.repoName}, ${w?.title.toLowerCase()} « ${w?.name} » en main${aspect ? ` (${aspect.name})` : ''}.`,
+    `${championTitle(g.champion)} descends into the ${g.ctx.repoName} dungeon, ${w?.title.toLowerCase()} "${w?.name}" in hand${aspect ? ` (${aspect.name})` : ''}.`,
+  ))
   if (run.offerQueue > 0) rollOffer(run, seed, combatStats(g))
   return g
 }
@@ -457,14 +461,14 @@ export function prepareRoom(state: GameState, seed: number): { g: GameState; spe
     const nemesis = g.champion.nemeses[0]
     if (nemesis && (run.biome === BIOMES - 1 || nemesis.rank >= 2 || roll() < 0.5)) {
       boss = { name: nemesis.name, rank: nemesis.rank, isNemesis: true, sig: nemesis.sig }
-      say(run, `☠ Ta Némésis t'attend : ${nemesis.name} (rang ${nemesis.rank}).`)
+      say(run, tr(`☠ Ta Némésis t'attend : ${nemesis.name} (rang ${nemesis.rank}).`, `☠ Your Nemesis awaits: ${nemesis.name} (rank ${nemesis.rank}).`))
     } else {
       boss = { name: BOSSES[run.biome % BOSSES.length]!, rank: 0, isNemesis: false }
-      say(run, `☠ ${boss.name} garde la sortie de l'étage.`)
+      say(run, tr(`☠ ${boss.name} garde la sortie de l'étage.`, `☠ ${boss.name} guards the way off this floor.`))
     }
   }
   const errorSpawns = !isFight || isBoss ? [] : f.errorPool.slice(0, room.kind === 'session' ? 3 : 1)
-  if (errorSpawns.length) say(run, `⚡ ${errorSpawns.map(one => one.sig).join(', ')} : nés de la session, ils t'attendent ici.`)
+  if (errorSpawns.length) say(run, tr(`⚡ ${errorSpawns.map(one => one.sig).join(', ')} : nés de la session, ils t'attendent ici.`, `⚡ ${errorSpawns.map(one => one.sig).join(', ')}: born of the session, they wait for you here.`))
   const chests = isFight ? Math.min(f.chestPool, 2) : 0
   const portals = isFight ? Math.min(f.portalPool, 1) : 0
   const familiars = Math.min(f.familiarPool, 2)
@@ -476,7 +480,7 @@ export function prepareRoom(state: GameState, seed: number): { g: GameState; spe
     const heal = 6 * f.scrollPool
     f.scrollPool = 0
     run.hp = Math.min(s.maxHp, run.hp + heal)
-    say(run, `📜 Parchemins lus par Claude : +${heal} PV.`)
+    say(run, tr(`📜 Parchemins lus par Claude : +${heal} PV.`, `📜 Scrolls read by Claude: +${heal} HP.`))
   }
   const off = 1 - Math.min(0.5, s.shopDiscount)
   const items: { kind: string; price?: number; tag?: string }[] = room.loot.map(kind => kind === 'shopItem'
@@ -491,8 +495,15 @@ export function prepareRoom(state: GameState, seed: number): { g: GameState; spe
     isFight, entry: run.entry, wallet: run.eclats, items,
     doors: exits(run.floor, run.cur).map(exit => ({ ...exit, kind: run.floor[exit.to]!.isSeen ? run.floor[exit.to]!.kind : 'normal' })),
   }
-  if (room.kind === 'shop') say(run, `$ La Boutique : cœur ${items.find(i => i.kind === 'shopHeart')?.price ?? '—'} ◆ · bienfait ${items.find(i => i.kind === 'shopBoon' && !i.tag)?.price ?? '—'} ◆ · objet ${items.find(i => i.tag === 'shopItem')?.price ?? '—'} ◆ (tu as ${run.eclats} ◆).`)
-  else if (room.kind === 'treasure' && room.loot.includes('altar')) say(run, '★ Salle du Trésor : un piédestal, deux objets. Un seul part avec toi.')
+  if (room.kind === 'shop') {
+    const heart = items.find(i => i.kind === 'shopHeart')?.price ?? '—'
+    const boon = items.find(i => i.kind === 'shopBoon' && !i.tag)?.price ?? '—'
+    const item = items.find(i => i.tag === 'shopItem')?.price ?? '—'
+    say(run, tr(
+      `$ La Boutique : cœur ${heart} ◆ · bienfait ${boon} ◆ · objet ${item} ◆ (tu as ${run.eclats} ◆).`,
+      `$ The Shop: heart ${heart} ◆ · boon ${boon} ◆ · item ${item} ◆ (you have ${run.eclats} ◆).`,
+    ))
+  } else if (room.kind === 'treasure' && room.loot.includes('altar')) say(run, tr('★ Salle du Trésor : un piédestal, deux objets. Un seul part avec toi.', '★ Treasure Room: one pedestal, two items. Only one leaves with you.'))
   else say(run, `— ${room.name}`)
   return { g, spec }
 }
@@ -580,7 +591,7 @@ function nextOffer(run: RunProgress, seed: number, s?: CombatStats) {
   else if ((run.itemQueue ?? 0) > 0) rollItems(run, seed)
 }
 
-// ---------- what the pane shows (pure text, French) ----------
+// ---------- what the pane shows (pure text, in the current language) ----------
 
 /** One offer line: `[rarity] slot · god — name : effect (note)`. */
 export function offerLabel(run: RunProgress, inst: BoonInst): string {
@@ -589,23 +600,32 @@ export function offerLabel(run: RunProgress, inst: BoonInst): string {
   const v = boonValue(def, inst.rarity, inst.level)
   if (def.isItem) {
     const n = (run.items ?? []).filter(id => id === def.id).length
-    return `[Objet] ${def.name} : ${def.desc(v)}${n > 0 ? ` (tu l'as ×${n}, ça se cumule)` : ''}`
+    return tr(`[Objet] ${def.name} : ${def.desc(v)}${n > 0 ? ` (tu l'as ×${n}, ça se cumule)` : ''}`, `[Item] ${def.name}: ${def.desc(v)}${n > 0 ? ` (you have ×${n}, it stacks)` : ''}`)
   }
-  if (def.duo) return `[Duo] ${def.god} — ${def.name} : ${def.desc(v)}`
+  if (def.duo) return tr(`[Duo] ${def.god} — ${def.name} : ${def.desc(v)}`, `[Duo] ${def.god} — ${def.name}: ${def.desc(v)}`)
   const held = run.boons.find(b => b.id === def.id)
   const r = (RARITY[inst.rarity] ?? RARITY[0]!).label
-  if (held) return `[${r} · Niv. ${inst.level ?? (held.level ?? 1) + 1}] ${SLOT_LABEL[def.slot]} · ${def.god} — ${def.name} : ${def.desc(v)} (améliore le tien)`
+  if (held) {
+    const level = inst.level ?? (held.level ?? 1) + 1
+    return tr(
+      `[${r} · Niv. ${level}] ${SLOT_LABEL[def.slot]} · ${def.god} — ${def.name} : ${def.desc(v)} (améliore le tien)`,
+      `[${r} · Lv. ${level}] ${SLOT_LABEL[def.slot]} · ${def.god} — ${def.name}: ${def.desc(v)} (upgrades yours)`,
+    )
+  }
   const replaced = def.slot !== 'passive' ? run.boons.map(b => defOf(b.id)).find(one => one && !one.duo && one.slot === def.slot) : undefined
-  return `[${r}] ${SLOT_LABEL[def.slot]} · ${def.god} (${GOD_STATUS[def.god] ?? ''}) — ${def.name} : ${def.desc(v)}${replaced ? ` (remplace « ${replaced.name} »)` : ''}`
+  return tr(
+    `[${r}] ${SLOT_LABEL[def.slot]} · ${def.god} (${godStatus(def.god)}) — ${def.name} : ${def.desc(v)}${replaced ? ` (remplace « ${replaced.name} »)` : ''}`,
+    `[${r}] ${SLOT_LABEL[def.slot]} · ${def.god} (${godStatus(def.god)}) — ${def.name}: ${def.desc(v)}${replaced ? ` (replaces "${replaced.name}")` : ''}`,
+  )
 }
 
 /** The header over an offer. */
 export function offerTitle(run: RunProgress): string {
   const offer = run.offer ?? []
-  if (isItemOffer(offer)) return `★ Deux objets t'attendent : prends-en un (1 ou 2).`
-  if (offer.length > 0 && offer.every(o => run.boons.some(b => b.id === o.id))) return '✦ Grenade de puissance : un de tes bienfaits gagne un niveau (1, 2 ou 3).'
-  if (offer.some(o => defOf(o.id)?.duo)) return "✦ Deux dieux s'accordent : un bienfait Duo est offert (1, 2 ou 3)."
-  return "✦ Un dieu du dépôt t'offre un bienfait (1, 2 ou 3) :"
+  if (isItemOffer(offer)) return tr(`★ Deux objets t'attendent : prends-en un (1 ou 2).`, '★ Two items await you: take one (1 or 2).')
+  if (offer.length > 0 && offer.every(o => run.boons.some(b => b.id === o.id))) return tr('✦ Grenade de puissance : un de tes bienfaits gagne un niveau (1, 2 ou 3).', '✦ Pom of Power: one of your boons gains a level (1, 2 or 3).')
+  if (offer.some(o => defOf(o.id)?.duo)) return tr("✦ Deux dieux s'accordent : un bienfait Duo est offert (1, 2 ou 3).", '✦ Two gods agree: a Duo boon is offered (1, 2 or 3).')
+  return tr("✦ Un dieu du dépôt t'offre un bienfait (1, 2 ou 3) :", '✦ A god of the repo offers you a boon (1, 2 or 3):')
 }
 
 /** The build in one line: boons with levels, then items with counts. */
@@ -617,7 +637,7 @@ export function buildSummary(run: RunProgress): string {
   const counts = new Map<string, number>()
   for (const id of run.items ?? []) counts.set(id, (counts.get(id) ?? 0) + 1)
   const items = [...counts].map(([id, n]) => `${defOf(id)?.name ?? id}${n > 1 ? ` ×${n}` : ''}`)
-  return [boons.length ? `Bienfaits : ${boons.join(' · ')}` : '', items.length ? `Objets : ${items.join(' · ')}` : ''].filter(Boolean).join('   ')
+  return [boons.length ? `${tr('Bienfaits :', 'Boons:')} ${boons.join(' · ')}` : '', items.length ? `${tr('Objets :', 'Items:')} ${items.join(' · ')}` : ''].filter(Boolean).join('   ')
 }
 
 /** Arsenal lines for one weapon's aspects: what each does, owned, worn, price. */
@@ -640,23 +660,24 @@ export function onKill(state: GameState, kill: { name: string; kind: string; lev
   if (kill.kind === 'error' && kill.sig) {
     const i = g.feed.errorPool.findIndex(one => one.sig === kill.sig)
     if (i >= 0) g.feed.errorPool.splice(i, 1)
-    say(run, `Tu terrasses ${kill.name}.`)
+    say(run, tr(`Tu terrasses ${kill.name}.`, `You strike down ${kill.name}.`))
   }
   if (kill.kind === 'nemesis') {
     g.champion.nemeses = g.champion.nemeses.filter(n => n.sig !== kill.sig)
-    const relic = forgeRelic(g, `Trophée de ${kill.name.split(',')[0]}`, `némésis vaincue sur ${g.ctx.repoName}`, hash(kill.name + now))
-    say(run, `⚒ Ta Némésis est abattue ! Relique forgée : ${relic.name}.`)
-    chronicle(g, now, `${championTitle(g.champion)} abattit enfin sa Némésis, ${kill.name}.`)
+    const relic = forgeRelic(g, tr(`Trophée de ${kill.name.split(',')[0]}`, `Trophy of ${kill.name.split(',')[0]}`), tr(`némésis vaincue sur ${g.ctx.repoName}`, `nemesis slain on ${g.ctx.repoName}`), hash(kill.name + now))
+    say(run, tr(`⚒ Ta Némésis est abattue ! Relique forgée : ${relic.name}.`, `⚒ Your Nemesis is slain! Relic forged: ${relic.name}.`))
+    chronicle(g, now, tr(`${championTitle(g.champion)} abattit enfin sa Némésis, ${kill.name}.`, `${championTitle(g.champion)} at last slew their Nemesis, ${kill.name}.`))
   } else if (kill.kind === 'boss' && hash(now + kill.name) % 2 === 0) {
-    const relic = forgeRelic(g, `Éclat de ${kill.name.replace(/^(Le |La |L')/, '')}`, `gardien de ${g.ctx.repoName}`, hash(kill.name + now))
-    say(run, `⚒ Relique arrachée au gardien : ${relic.name}.`)
+    const bare = kill.name.replace(/^(Le |La |L'|The )/, '')
+    const relic = forgeRelic(g, tr(`Éclat de ${bare}`, `Shard of ${bare}`), tr(`gardien de ${g.ctx.repoName}`, `guardian of ${g.ctx.repoName}`), hash(kill.name + now))
+    say(run, tr(`⚒ Relique arrachée au gardien : ${relic.name}.`, `⚒ Relic torn from the guardian: ${relic.name}.`))
   }
   const c = g.champion
   c.xp += kill.level
   while (c.xp >= xpToLevel(c.level)) {
     c.xp -= xpToLevel(c.level)
     c.level += 1
-    say(run, `⬆ ${c.name} passe niveau ${c.level} (+3 PV max, +2% dégâts).`)
+    say(run, tr(`⬆ ${c.name} passe niveau ${c.level} (+3 PV max, +2% dégâts).`, `⬆ ${c.name} reaches level ${c.level} (+3 max HP, +2% damage).`))
   }
   return g
 }
@@ -665,7 +686,7 @@ export function onChest(state: GameState, n: number): GameState {
   const g = clone(state)
   if (g.run) {
     g.run.eclats += n
-    say(g.run, `◆ +${n} éclats.`)
+    say(g.run, tr(`◆ +${n} éclats.`, `◆ +${n} shards.`))
   }
   return g
 }
@@ -694,15 +715,15 @@ export function onBuy(state: GameState, item: string, price: number): GameState 
   if (item === 'shopHeart') {
     const s = combatStats(g)
     run.hp = Math.min(s.maxHp, run.hp + Math.round(s.maxHp * 0.4))
-    say(run, `♥ Acheté : un cœur (−${price} ◆).`)
+    say(run, tr(`♥ Acheté : un cœur (−${price} ◆).`, `♥ Bought: a heart (−${price} ◆).`))
   } else if (item === 'shopItem') {
     run.itemQueue = (run.itemQueue ?? 0) + 1
     nextOffer(run, run.seed + run.depth + price, combatStats(g))
-    say(run, `★ Acheté : un objet (−${price} ◆).`)
+    say(run, tr(`★ Acheté : un objet (−${price} ◆).`, `★ Bought: an item (−${price} ◆).`))
   } else {
     run.offerQueue += 1
     nextOffer(run, run.seed + run.depth + price, combatStats(g))
-    say(run, `✦ Acheté : un bienfait (−${price} ◆).`)
+    say(run, tr(`✦ Acheté : un bienfait (−${price} ◆).`, `✦ Bought: a boon (−${price} ◆).`))
   }
   return g
 }
@@ -721,19 +742,19 @@ export function onCleared(state: GameState, hp: number, now: string): GameState 
   run.hp = Math.min(s.maxHp, hp + 2 + s.roomHeal)
   if (room.kind === 'boss') {
     g.lineage.eclats += run.eclats
-    say(run, `🏆 Gardien vaincu ! ${run.eclats} éclats mis en sûreté dans la Lignée.`)
+    say(run, tr(`🏆 Gardien vaincu ! ${run.eclats} éclats mis en sûreté dans la Lignée.`, `🏆 Guardian defeated! ${run.eclats} shards stored safely in the Lineage.`))
     run.eclats = 0
     if (run.biome + 1 >= BIOMES) return victory(g, run, now)
-    say(run, 'Une trappe s\'ouvre vers l\'étage suivant.')
+    say(run, tr('Une trappe s\'ouvre vers l\'étage suivant.', 'A trapdoor opens to the next floor.'))
     // Isaac's boss item: the guardian leaves something behind.
     run.itemQueue = (run.itemQueue ?? 0) + 1
-    say(run, '★ Le gardien laisse un objet derrière lui.')
+    say(run, tr('★ Le gardien laisse un objet derrière lui.', '★ The guardian leaves an item behind.'))
   } else if (room.kind === 'normal' || room.kind === 'session') {
     // Hades' room rewards: a god watches every few fights on a floor.
     const fights = run.floor.filter(one => one.isCleared && (one.kind === 'normal' || one.kind === 'session')).length
     if (BOON_FIGHTS.includes(fights)) {
       run.offerQueue += 1
-      say(run, '✦ Un dieu du dépôt a vu ton combat : un bienfait t\'attend.')
+      say(run, tr('✦ Un dieu du dépôt a vu ton combat : un bienfait t\'attend.', '✦ A god of the repo watched you fight: a boon awaits you.'))
     }
   }
   nextOffer(run, run.seed + run.depth, s)
@@ -760,7 +781,7 @@ export function onDescend(state: GameState, hp: number): GameState {
   run.biome += 1
   run.depth += 1
   newFloor(g, run)
-  say(run, `⬇ Étage ${run.biome + 1} : ${run.biomeName}.`)
+  say(run, tr(`⬇ Étage ${run.biome + 1} : ${run.biomeName}.`, `⬇ Floor ${run.biome + 1}: ${run.biomeName}.`))
   return g
 }
 
@@ -773,13 +794,13 @@ export function onDeath(state: GameState, killer: string, now: string): GameStat
   g.champion.deaths += 1
   const scar = killer.split(',')[0] ?? killer
   if (!g.champion.scars.includes(scar)) g.champion.scars = [scar, ...g.champion.scars].slice(0, 5)
-  chronicle(g, now, `${championTitle(g.champion)} tomba face à ${killer} dans « ${roomName(run)} ».`)
+  chronicle(g, now, tr(`${championTitle(g.champion)} tomba face à ${killer} dans « ${roomName(run)} ».`, `${championTitle(g.champion)} fell to ${killer} in "${roomName(run)}".`))
   g.epilogue = [
-    '💀 TU ES TOMBÉ',
-    `${killer} a eu raison de ${championTitle(g.champion)} dans « ${roomName(run)} ».`,
-    `Éclats sauvés : ${kept} sur ${run.eclats} (la moitié du butin en jeu).`,
-    `Nouvelle cicatrice : rancune contre ${scar} (+50% de dégâts contre lui).`,
-    `${run.kills} créatures vaincues. Le champion garde ses niveaux. La Lignée continue.`,
+    tr('💀 TU ES TOMBÉ', '💀 YOU FELL'),
+    tr(`${killer} a eu raison de ${championTitle(g.champion)} dans « ${roomName(run)} ».`, `${killer} got the better of ${championTitle(g.champion)} in "${roomName(run)}".`),
+    tr(`Éclats sauvés : ${kept} sur ${run.eclats} (la moitié du butin en jeu).`, `Shards saved: ${kept} of ${run.eclats} (half the loot at stake).`),
+    tr(`Nouvelle cicatrice : rancune contre ${scar} (+50% de dégâts contre lui).`, `New scar: grudge against ${scar} (+50% damage against it).`),
+    tr(`${run.kills} créatures vaincues. Le champion garde ses niveaux. La Lignée continue.`, `${run.kills} creatures slain. The champion keeps their levels. The Lineage goes on.`),
   ]
   g.run = null
   g.mode = 'epilogue'
@@ -787,14 +808,17 @@ export function onDeath(state: GameState, killer: string, now: string): GameStat
 }
 
 function victory(g: GameState, run: RunProgress, now: string): GameState {
-  const relic = forgeRelic(g, `Couronne de ${g.ctx.repoName}`, `victoire sur ${g.ctx.repoName}`, hash(now + g.ctx.repoKey))
+  const relic = forgeRelic(g, tr(`Couronne de ${g.ctx.repoName}`, `Crown of ${g.ctx.repoName}`), tr(`victoire sur ${g.ctx.repoName}`, `victory on ${g.ctx.repoName}`), hash(now + g.ctx.repoKey))
   g.champion.victories += 1
-  chronicle(g, now, `${championTitle(g.champion)} a conquis les ${BIOMES} biomes de ${g.ctx.repoName} (${run.kills} victimes). La « ${relic.name} » est forgée.`)
+  chronicle(g, now, tr(
+    `${championTitle(g.champion)} a conquis les ${BIOMES} biomes de ${g.ctx.repoName} (${run.kills} victimes). La « ${relic.name} » est forgée.`,
+    `${championTitle(g.champion)} conquered all ${BIOMES} biomes of ${g.ctx.repoName} (${run.kills} slain). The "${relic.name}" is forged.`,
+  ))
   g.epilogue = [
-    '🏆 VICTOIRE',
-    `${championTitle(g.champion)} remonte du donjon de ${g.ctx.repoName}.`,
-    `${run.kills} créatures vaincues · ${run.boons.length} bienfaits portés.`,
-    `Relique forgée : ${relic.name} (${relicLabel(relic.effect, relic.value)}).`,
+    tr('🏆 VICTOIRE', '🏆 VICTORY'),
+    tr(`${championTitle(g.champion)} remonte du donjon de ${g.ctx.repoName}.`, `${championTitle(g.champion)} climbs back out of the ${g.ctx.repoName} dungeon.`),
+    tr(`${run.kills} créatures vaincues · ${run.boons.length} bienfaits portés.`, `${run.kills} creatures slain · ${run.boons.length} boons carried.`),
+    tr(`Relique forgée : ${relic.name} (${relicLabel(relic.effect, relic.value)}).`, `Relic forged: ${relic.name} (${relicLabel(relic.effect, relic.value)}).`),
   ]
   g.run = null
   g.mode = 'epilogue'
@@ -821,7 +845,7 @@ export function menu(state: GameState, a: MenuAction, now: string, seed: number)
       if (a.mode === 'hall') g.epilogue = []
       return g
     case 'newRun':
-      if (g.run) chronicle(g, now, `${championTitle(g.champion)} leva le camp et repartit de zéro.`)
+      if (g.run) chronicle(g, now, tr(`${championTitle(g.champion)} leva le camp et repartit de zéro.`, `${championTitle(g.champion)} broke camp and started over from scratch.`))
       return startRun(g, seed, now)
     case 'resume':
       if (g.run) {
@@ -837,7 +861,7 @@ export function menu(state: GameState, a: MenuAction, now: string, seed: number)
       if (cost === undefined || g.lineage.eclats < cost) return g
       g.lineage.eclats -= cost
       g.lineage.mirror[def.id] = rank + 1
-      notice(g, `Miroir : ${def.name} rang ${rank + 1}.`)
+      notice(g, tr(`Miroir : ${def.name} rang ${rank + 1}.`, `Mirror: ${def.name} rank ${rank + 1}.`))
       return g
     }
     case 'equip': {
@@ -853,7 +877,7 @@ export function menu(state: GameState, a: MenuAction, now: string, seed: number)
         if (g.lineage.eclats < def.cost) return g
         g.lineage.eclats -= def.cost
         g.lineage.weapons.push(def.id)
-        notice(g, `Arsenal : ${def.title} « ${def.name} » débloquée.`)
+        notice(g, tr(`Arsenal : ${def.title} « ${def.name} » débloquée.`, `Arsenal: ${def.title} "${def.name}" unlocked.`))
       }
       g.lineage.weapon = def.id as WeaponId
       return g
@@ -866,7 +890,7 @@ export function menu(state: GameState, a: MenuAction, now: string, seed: number)
         if (g.lineage.eclats < def.cost) return g
         g.lineage.eclats -= def.cost
         g.lineage.aspects = [...owned, def.id]
-        notice(g, `Arsenal : ${def.name} débloqué.`)
+        notice(g, tr(`Arsenal : ${def.name} débloqué.`, `Arsenal: ${def.name} unlocked.`))
       }
       const on = { ...(g.lineage.aspectOn ?? {}) }
       if (on[def.weapon] === def.id) delete on[def.weapon]
@@ -888,21 +912,21 @@ export function menu(state: GameState, a: MenuAction, now: string, seed: number)
       if (def.isItem) {
         run.items = [...(run.items ?? []), def.id]
         def.onPick?.(run, 1)
-        say(run, `★ Objet pris : « ${def.name} » (${def.desc(1)}).`)
+        say(run, tr(`★ Objet pris : « ${def.name} » (${def.desc(1)}).`, `★ Item taken: "${def.name}" (${def.desc(1)}).`))
       } else if (held) {
         held.level = Math.max((held.level ?? 1) + 1, chosen.level ?? 0)
         held.rarity = Math.max(held.rarity, chosen.rarity)
-        say(run, `✦ « ${def.name} » passe niveau ${held.level} : ${def.desc(boonValue(def, held.rarity, held.level))}.`)
+        say(run, tr(`✦ « ${def.name} » passe niveau ${held.level} : ${def.desc(boonValue(def, held.rarity, held.level))}.`, `✦ "${def.name}" reaches level ${held.level}: ${def.desc(boonValue(def, held.rarity, held.level))}.`))
       } else {
         if (def.slot !== 'passive') {
           const replaced = run.boons.find(b => { const one = defOf(b.id); return !!one && !one.duo && one.slot === def.slot })
           run.boons = run.boons.filter(b => b !== replaced)
-          if (replaced) say(run, `(${defOf(replaced.id)?.name} est remplacé.)`)
+          if (replaced) say(run, tr(`(${defOf(replaced.id)?.name} est remplacé.)`, `(${defOf(replaced.id)?.name} is replaced.)`))
         }
         run.boons.push({ id: chosen.id, rarity: chosen.rarity })
         def.onPick?.(run, boonValue(def, chosen.rarity))
-        say(run, `✦ ${def.god} t'accorde « ${def.name} » : ${def.desc(boonValue(def, chosen.rarity))}.`)
-        if (eligibleDuos(run).length > duosBefore) say(run, '✦ Deux de tes dieux pourraient s\'accorder : un Duo peut t\'être offert.')
+        say(run, tr(`✦ ${def.god} t'accorde « ${def.name} » : ${def.desc(boonValue(def, chosen.rarity))}.`, `✦ ${def.god} grants you "${def.name}": ${def.desc(boonValue(def, chosen.rarity))}.`))
+        if (eligibleDuos(run).length > duosBefore) say(run, tr('✦ Deux de tes dieux pourraient s\'accorder : un Duo peut t\'être offert.', '✦ Two of your gods could agree: a Duo may be offered to you.'))
       }
       const s = combatStats(g)
       const gained = s.maxHp - before

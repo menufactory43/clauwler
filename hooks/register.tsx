@@ -14,9 +14,10 @@ import { frameSize, renderFrame, toCells, toQuads } from './render'
 import type { Input, Live } from './sim'
 import { FH, FW, ROOM, createRoom, doorAt, inject, step } from './sim'
 import type { SessionNote } from './session'
-import { COMMIT_ECLATS, ECHO_NAME, TEST_HEAL, TEST_SHARDS, addEcho, isLongWork, narratorLine, noteFor } from './session'
+import { COMMIT_ECLATS, TEST_HEAL, TEST_SHARDS, addEcho, echoName, isEcho, isLongWork, narratorLine, noteFor } from './session'
 import type { Sfx } from './sound'
 import { SIGNAL_SFX, gainOf, newMixer, pickSounds } from './sound'
+import { getLang, langFromEnv, setLang, tr } from './i18n'
 
 const PANE = 'clauwler'
 /** Shown in the pane, so a reload can be told from a stale module. */
@@ -206,13 +207,13 @@ async function detectClass($: EngineInterface, dir: string): Promise<ClassId> {
 
 async function loadContext($: EngineInterface): Promise<{ ctx: Ctx; cls: ClassId; root: string }> {
   const repo = await $.session.repo()
-  if (!repo) return { ctx: { repoKey: 'wild', repoName: 'Terres sauvages', branch: '-', isWild: true }, cls: 'vagabond', root: await $.session.root() }
+  if (!repo) return { ctx: { repoKey: 'wild', repoName: tr('Terres sauvages', 'Wildlands'), branch: '-', isWild: true }, cls: 'vagabond', root: await $.session.root() }
   let key = normalizeRemote(repo.remote)
   if (!key) {
     const first = await git($, repo.root, ['rev-list', '--max-parents=0', 'HEAD'])
     key = first ? `local:${first.split('\n')[0]!.slice(0, 12)}` : `path:${repo.root}`
   }
-  const repoName = (normalizeRemote(repo.remote) ?? repo.root).split('/').pop() || 'dépôt'
+  const repoName = (normalizeRemote(repo.remote) ?? repo.root).split('/').pop() || tr('dépôt', 'repo')
   const branch = (await git($, repo.root, ['rev-parse', '--abbrev-ref', 'HEAD'])) ?? 'main'
   return { ctx: { repoKey: key, repoName, branch, isWild: false }, cls: await detectClass($, repo.root), root: repo.root }
 }
@@ -233,7 +234,7 @@ async function change($: EngineInterface, fn: (g: GameState) => GameState, isEnd
   await persist($, g, isEnded)
   const relic = g?.lineage.vault[g.lineage.vault.length - 1]
   if (before && g && relic && g.lineage.vault.length > before.lineage.vault.length) {
-    $.ui.toast(`⚒ Relique forgée : ${relic.name}`)
+    $.ui.toast(tr(`⚒ Relique forgée : ${relic.name}`, `⚒ Relic forged: ${relic.name}`))
     queueSfx('seal')
   }
   if (before && g && g.champion.level > before.champion.level) queueSfx('levelup')
@@ -266,6 +267,21 @@ async function enterRoom($: EngineInterface) {
 
 // ---------- boot ----------
 
+/** The language: the one picked in the Hall (kept in the store), else the environment's. */
+async function loadLang($: EngineInterface) {
+  const picked = await $.store.get('lang').catch(() => undefined)
+  if (picked === 'fr' || picked === 'en') {
+    setLang(picked)
+    return
+  }
+  setLang(langFromEnv({
+    LANGUAGE: await $.env.get('LANGUAGE').catch(() => undefined),
+    LC_ALL: await $.env.get('LC_ALL').catch(() => undefined),
+    LC_MESSAGES: await $.env.get('LC_MESSAGES').catch(() => undefined),
+    LANG: await $.env.get('LANG').catch(() => undefined),
+  }))
+}
+
 function ensureLoop($: EngineInterface) {
   if (isLooping) return
   isLooping = true
@@ -274,6 +290,7 @@ function ensureLoop($: EngineInterface) {
 
 async function start($: EngineInterface, isOpening: boolean) {
   ensureLoop($)
+  await loadLang($)
   const sessionId = await $.session.id()
   const loaded = await loadContext($)
   root = loaded.root
@@ -369,7 +386,7 @@ function viewOf(g: GameState): View {
     boons: run?.boons.length ?? 0,
     isPaused: g.isPaused,
     isOffer: !!run?.offer,
-    hint: 'une touche',
+    hint: tr('une touche', 'any key'),
     scale: 1,
     hasPixelHud: false,
     hasWorldText: gfx !== 'quads',
@@ -486,7 +503,7 @@ async function handleSignals($: EngineInterface) {
       case 'chest': await change($, g => onChest(g, sig.n)); break
       case 'portal': await change($, g => onPortal(syncHp(g, hp, live?.player.defiance ?? 0))); break
       case 'log': await change($, g => log(g, sig.text)); break
-      case 'revived': await change($, g => log(syncHp(g, hp, live?.player.defiance ?? 0), '✟ Défi de la mort : tu te relèves !')); break
+      case 'revived': await change($, g => log(syncHp(g, hp, live?.player.defiance ?? 0), tr('✟ Défi de la mort : tu te relèves !', '✟ Death Defiance: you rise again!'))); break
       case 'cleared': {
         const g = await change($, s => onCleared(syncHp(s, hp, live?.player.defiance ?? 0), hp, now()))
         if (!g?.run) {
@@ -515,7 +532,7 @@ async function handleSignals($: EngineInterface) {
         return
     }
   }
-  if (live && mirror?.run) $.ui.status(`⚔ ${mirror.champion.name} ${Math.ceil(live.player.hp)}/${live.stats.maxHp} PV · ◆${mirror.run.eclats}`)
+  if (live && mirror?.run) $.ui.status(`⚔ ${mirror.champion.name} ${Math.ceil(live.player.hp)}/${live.stats.maxHp} ${tr('PV', 'HP')} · ◆${mirror.run.eclats}`)
 }
 
 // ---------- keys ----------
@@ -619,6 +636,14 @@ async function handleKey($: EngineInterface, key: string) {
     await play($, { k: 'mode', mode: 'hall' })
     return
   }
+  if (key === 'l') {
+    // Outside a run L switches the language (in a run it fires right).
+    setLang(getLang() === 'fr' ? 'en' : 'fr')
+    await $.store.set('lang', getLang())
+    queueSfx('menu')
+    await change($, s => ({ ...s }))
+    return
+  }
   if (/^[1-9]$/.test(key)) {
     const i = Number(key) - 1
     if (g.mode === 'mirror' && MIRROR[i]) await play($, { k: 'buy', id: MIRROR[i]!.id })
@@ -657,7 +682,7 @@ function toEvent(tool: string, input: Record<string, unknown>, ran: { deny?: str
       return ran.isError ? null : { kind: 'edit', path: relativize(input.file_path ?? input.notebook_path) }
     case 'Bash': {
       const command = typeof input.command === 'string' ? input.command : ''
-      if (ran.isError) return { kind: 'fail', ...(parseError(ran.text ?? '') ?? { sig: 'Error', name: 'Error, la Bête Anonyme' }) }
+      if (ran.isError) return { kind: 'fail', ...(parseError(ran.text ?? '') ?? { sig: 'Error', name: tr('Error, la Bête Anonyme', 'Error, the Nameless Beast') }) }
       const message = commitMessage(command)
       if (message) return { kind: 'commit', message }
       return isTestCommand(command) ? { kind: 'test' } : null
@@ -701,7 +726,7 @@ function sessionLive(l: Live, ev: SessionEvent, before: number, heal: number, no
       // The rift the error crawls out of.
       l.fx.push({ kind: 'ring', x: foe.x, y: foe.y, ttl: 0.9, max: 0.9, color: [200, 60, 160], r: 18 })
       l.fx.push({ kind: 'tele', x: foe.x, y: foe.y, r: 12, ttl: 0.7, max: 0.7, color: [200, 60, 160] })
-      l.banner = { text: `Faille : ${ev.sig}`, ttl: 1.8 }
+      l.banner = { text: tr(`Faille : ${ev.sig}`, `Rift: ${ev.sig}`), ttl: 1.8 }
       l.shake = Math.max(l.shake, 0.25)
       queueSfx('rift')
       break
@@ -716,14 +741,14 @@ function sessionLive(l: Live, ev: SessionEvent, before: number, heal: number, no
         const y = Math.round(Math.min(ROOM.y1 - 6, Math.max(ROOM.y0 + 6, p.y + Math.sin(a) * 10)))
         l.pickups.push({ x, y, kind: 'shard', t: 0 })
       }
-      l.banner = { text: 'Tests verts !', ttl: 1.4 }
+      l.banner = { text: tr('Tests verts !', 'Tests green!'), ttl: 1.4 }
       queueSfx('heal')
       break
     }
     case 'commit':
       l.fx.push({ kind: 'num', x: p.x, y: p.y - 12, ttl: 1.1, max: 1.1, color: [109, 194, 202], text: `+${COMMIT_ECLATS}` })
       l.fx.push({ kind: 'ring', x: p.x, y: p.y - 2, ttl: 0.6, max: 0.6, color: [218, 212, 94], r: 24 })
-      l.banner = { text: note?.effect.startsWith('relique') ? 'Relique forgée !' : `Sceau de commit ${note?.effect.match(/\d\/\d/)?.[0] ?? ''}`.trim(), ttl: 1.6 }
+      l.banner = { text: /^reli/i.test(note?.effect ?? '') ? tr('Relique forgée !', 'Relic forged!') : `${tr('Sceau de commit', 'Commit seal')} ${note?.effect.match(/\d\/\d/)?.[0] ?? ''}`.trim(), ttl: 1.6 }
       queueSfx('seal')
       break
     case 'agent':
@@ -751,11 +776,11 @@ async function onTurn($: EngineInterface, durationMs: number, turnId: string) {
     live.ammo = s.castAmmo
     live.player.hp = Math.min(s.maxHp, live.player.hp + heal)
     live.fx.push({ kind: 'num', x: live.player.x, y: live.player.y - 12, ttl: 0.9, max: 0.9, color: [218, 212, 94], text: `+${heal}` })
-    sessionNote = { icon: '✒', what: 'Claude a fini son tour', effect: `pouvoir rechargé, +${heal} PV`, color: '#dad45e' }
-    await change($, s0 => log(s0, `✒ Le Narrateur : ${line}`))
+    sessionNote = { icon: '✒', what: tr('Claude a fini son tour', 'Claude finished its turn'), effect: tr(`pouvoir rechargé, +${heal} PV`, `power recharged, +${heal} HP`), color: '#dad45e' }
+    await change($, s0 => log(s0, tr(`✒ Le Narrateur : ${line}`, `✒ The Narrator: ${line}`)))
     queueSfx('narrator')
   } else {
-    sessionNote = { icon: '✒', what: 'Claude a fini son tour', effect: line, color: '#dad45e' }
+    sessionNote = { icon: '✒', what: tr('Claude a fini son tour', 'Claude finished its turn'), effect: line, color: '#dad45e' }
   }
   if (!isLongWork(durationMs, workMs)) {
     if (!isLive) await change($, s0 => ({ ...s0 }))
@@ -766,17 +791,17 @@ async function onTurn($: EngineInterface, durationMs: number, turnId: string) {
   await change($, s0 => {
     if (!s0.run) {
       // No run: the long work waits as a boon for the next descent.
-      sessionNote = { icon: '✧', what: 'longue session de Claude', effect: 'un bienfait t\'attend à la prochaine expédition', color: '#c83ca0' }
+      sessionNote = { icon: '✧', what: tr('longue session de Claude', 'long Claude session'), effect: tr('un bienfait t\'attend à la prochaine expédition', 'a boon awaits you on your next run'), color: '#c83ca0' }
       return { ...s0, feed: { ...s0.feed, runeOffers: s0.feed.runeOffers + 1 } }
     }
     placed = addEcho(s0)
-    if (placed) sessionNote = { icon: '✧', what: 'longue session de Claude', effect: `un ${ECHO_NAME} apparaît sur la carte (autel à bienfait)`, color: '#c83ca0' }
+    if (placed) sessionNote = { icon: '✧', what: tr('longue session de Claude', 'long Claude session'), effect: tr(`un ${echoName()} apparaît sur la carte (autel à bienfait)`, `a ${echoName()} appears on the map (boon altar)`), color: '#c83ca0' }
     return placed?.g ?? s0
   })
   const echo = placed as ReturnType<typeof addEcho>
   if (echo && live && mirror?.run && echo.at === mirror.run.cur) {
     live.doors.push({ side: echo.side, to: echo.to, kind: 'treasure', ...doorAt(echo.side) })
-    live.banner = { text: 'Un écho de session s\'ouvre', ttl: 1.8 }
+    live.banner = { text: tr('Un écho de session s\'ouvre', 'A session echo opens'), ttl: 1.8 }
   }
   if (echo) queueSfx('boon')
 }
@@ -791,7 +816,8 @@ function hashText(text: string): number {
 
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
-    await $.command.register({ name: 'clauwler', description: 'Ouvre le donjon de Clauwler dans un panneau' })
+    await loadLang($)
+    await $.command.register({ name: 'clauwler', description: tr('Ouvre le donjon de Clauwler dans un panneau', 'Opens the Clauwler dungeon in a pane') })
     await start($, true)
     return next(e)
   })
@@ -802,7 +828,11 @@ export const register: Register = on => {
     if (mirror && mirror.mode !== 'run') await play($, mirror.run ? { k: 'resume' } : { k: 'newRun' })
     else if (mirror?.isPaused) await change($, g => ({ ...g, isPaused: false }))
     const opened = await $.ui.open({ id: PANE, title: 'Clauwler', focus: true, columns: 120 })
-    return { text: opened.isPlaced ? 'En jeu : ZQSD bouger (tu frappes tout seul) · E esquive · R pouvoir · P pause · Esc rend la main à Claude.' : "Le panneau n'a pas pu s'ouvrir ici." }
+    return {
+      text: opened.isPlaced
+        ? tr('En jeu : ZQSD bouger (tu frappes tout seul) · E esquive · R pouvoir · P pause · Esc rend la main à Claude.', 'In game: WASD to move (you strike on your own) · E dodge · R power · P pause · Esc hands back to Claude.')
+        : tr("Le panneau n'a pas pu s'ouvrir ici.", "The pane couldn't open here."),
+    }
   })
 
   on('ui.message', async ($, e, next) => {
@@ -846,7 +876,7 @@ export const register: Register = on => {
     const result = await next(e)
     if (e.agentId !== undefined) return result
     if (mirror?.mode === 'run' && (await $.clock.now()) - lastInputAt < 4000) {
-      $.ui.toast('Claude a fini son tour. Esc pour lui répondre (le jeu se met en pause).')
+      $.ui.toast(tr('Claude a fini son tour. Esc pour lui répondre (le jeu se met en pause).', 'Claude finished its turn. Esc to answer (the game pauses).'))
     }
     try {
       if (e.reason === 'answer') await onTurn($, e.durationMs, e.turnId)
@@ -872,7 +902,7 @@ export const register: Register = on => {
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const { Box, Text, Button } = $.ui.resolve(e)
     const g = await read($, game)
-    if (!g) return <Text dimColor>Le donjon se réveille…</Text>
+    if (!g) return <Text dimColor>{tr('Le donjon se réveille…', 'The dungeon wakes…')}</Text>
     const c = g.champion
     const cols = Math.max(20, Math.min(e.props.bodyColumns, FW))
     const press = (a: MenuAction) => () => play($, a)
@@ -883,7 +913,7 @@ export const register: Register = on => {
       </Box>
     )
     const header = (
-      <Text bold color="#dad45e">⚔ {championTitle(c)} <Text dimColor>· niv {c.level} · {g.ctx.repoName}{g.ctx.isWild ? '' : `@${g.ctx.branch}`}</Text></Text>
+      <Text bold color="#dad45e">⚔ {championTitle(c)} <Text dimColor>· {tr('niv', 'lv')} {c.level} · {g.ctx.repoName}{g.ctx.isWild ? '' : `@${g.ctx.branch}`}</Text></Text>
     )
     const isFocused = e.props.isFocused
     const minimap = (run: NonNullable<GameState['run']>) => {
@@ -898,7 +928,7 @@ export const register: Register = on => {
           const room = run.floor[i]
           const [glyph, color] = !room ? ['  ', undefined]
             : i === run.cur ? ['◆ ', '#dad45e']
-              : room.name === ECHO_NAME ? ['✧ ', '#c83ca0']
+              : isEcho(room.name) ? ['✧ ', '#c83ca0']
               : room.kind === 'boss' ? ['☠ ', '#d04648']
                 : room.kind === 'treasure' ? ['★ ', '#dad45e']
                   : room.kind === 'shop' ? ['$ ', '#6dc2ca']
@@ -911,8 +941,8 @@ export const register: Register = on => {
       return <Box flexDirection="column" flexShrink={0}>{rows}</Box>
     }
     const focusLine = isFocused
-      ? <Text color="#6daa2c" bold>🎮 Tu joues · Esc → Claude <Text dimColor>{BUILD}</Text></Text>
-      : <Text color="#dad45e" bold>⌨  Claude a la main · ctrl+x tab (ou /clauwler) pour jouer</Text>
+      ? <Text color="#6daa2c" bold>{tr('🎮 Tu joues · Esc → Claude ', '🎮 You play · Esc → Claude ')}<Text dimColor>{BUILD}</Text></Text>
+      : <Text color="#dad45e" bold>{tr('⌨  Claude a la main · ctrl+x tab (ou /clauwler) pour jouer', '⌨  Claude has the keys · ctrl+x tab (or /clauwler) to play')}</Text>
     const sessionLine = () => {
       const note = sessionNote
       return (
@@ -920,8 +950,8 @@ export const register: Register = on => {
           <Text dimColor>Session </Text>
           {note
             ? <Text color={note.color} bold>{note.icon} {note.what}</Text>
-            : <Text color="#4e4a4e">⚡ en veille</Text>}
-          <Text dimColor> → {note ? note.effect : 'erreurs, tests et commits de Claude nourrissent le donjon'}</Text>
+            : <Text color="#4e4a4e">{tr('⚡ en veille', '⚡ idle')}</Text>}
+          <Text dimColor> → {note ? note.effect : tr('erreurs, tests et commits de Claude nourrissent le donjon', "Claude's errors, tests and commits feed the dungeon")}</Text>
         </Text>
       )
     }
@@ -930,7 +960,7 @@ export const register: Register = on => {
     if (g.mode === 'run' && g.run) {
       const run = g.run
       const rows = Math.max(8, Math.round(cols / 3.2))
-      let arena = <Text dimColor>Le combat se joue dans le terminal.</Text>
+      let arena = <Text dimColor>{tr('Le combat se joue dans le terminal.', 'The fight plays in the terminal.')}</Text>
       if (e.surface === 'terminal') {
         const { Image, Raster } = $.ui.resolve(e)
         if (gfx === 'image') {
@@ -950,7 +980,7 @@ export const register: Register = on => {
           // Rows the arena leaves free: the map and the log fill them when there are enough.
           spareBelow = bodyRows - fitRows - 4
           paneInfo = `arena ${fitCols}x${fitRows} pane ${e.props.placement} body ${e.props.bodyColumns}x${scrollRows} viewport ${e.viewport?.columns}x${e.viewport?.rows}`
-          arena = <Box justifyContent="center"><Image key="arena" source={{ png: frameB64 }} columns={fitCols} rows={fitRows} alt="Pas d'image dans ce terminal." /></Box>
+          arena = <Box justifyContent="center"><Image key="arena" source={{ png: frameB64 }} columns={fitCols} rows={fitRows} alt={tr("Pas d'image dans ce terminal.", 'No pictures in this terminal.')} /></Box>
         } else {
           const spare = (e.viewport?.rows ?? 40) - 16
           if (gfx === 'quads') {
@@ -977,16 +1007,21 @@ export const register: Register = on => {
         return '█'.repeat(full) + '░'.repeat(n - full)
       }
       const top = g.isPaused
-        ? <Text bold color="#dad45e">⏸ PAUSE · une touche pour reprendre</Text>
+        ? <Text bold color="#dad45e">{tr('⏸ PAUSE · une touche pour reprendre', '⏸ PAUSE · any key to resume')}</Text>
         : run.offer
-          ? <Text bold color="#dad45e">✦ Choisis : {run.offer.map((_, i) => i + 1).join(', ')}</Text>
+          ? <Text bold color="#dad45e">{tr('✦ Choisis : ', '✦ Choose: ')}{run.offer.map((_, i) => i + 1).join(', ')}</Text>
           : hud?.boss
             ? <Text color="#d04648" bold wrap="truncate-end">☠ {hud.boss.name} {bar(hud.boss.pct / 100, 16)} {hud.boss.pct}%{hud.banner ? <Text color="#dad45e"> · {hud.banner}</Text> : null}</Text>
             : hud?.banner
               ? <Text bold color="#dad45e" wrap="truncate-end">{hud.banner}</Text>
               : <Text> </Text>
       const shield = Math.floor(live?.effects?.shield ?? 0)
-      const runPad: [string, string][] = [['z', '↑'], ['q', '←'], ['s', '↓'], ['d', '→'], ['e', 'esquive'], ['r', 'pouvoir'], ['p', 'pause'], ['h', 'camp'], ['x', 'son']]
+      // QWERTY players get WASD in English; ZQSD stays the French pad (both always move).
+      const isEn = getLang() === 'en'
+      const runPad: [string, string][] = [
+        [isEn ? 'w' : 'z', '↑'], [isEn ? 'a' : 'q', '←'], ['s', '↓'], ['d', '→'],
+        ['e', tr('esquive', 'dodge')], ['r', tr('pouvoir', 'power')], ['p', 'pause'], ['h', 'camp'], ['x', tr('son', 'sound')],
+      ]
       return (
         <Box flexDirection="column">
           {hud ? (
@@ -998,9 +1033,9 @@ export const register: Register = on => {
               <Text color="#597dce">  R {'▮'.repeat(hud.ammo)}{'▯'.repeat(Math.max(0, hud.maxAmmo - hud.ammo))}</Text>
               <Text color={hud.isDashReady ? '#6dc2ca' : '#4e4a4e'}>  E {hud.isDashReady ? '●' : '○'}</Text>
               <Text color="#dad45e">  ✦ {run.boons.length}</Text>
-              <Text dimColor>  Étage {run.biome + 1}/{BIOMES} · « {roomName(run)} »</Text>
+              <Text dimColor>  {tr('Étage', 'Floor')} {run.biome + 1}/{BIOMES} · {tr(`« ${roomName(run)} »`, `“${roomName(run)}”`)}</Text>
             </Text>
-          ) : <Text dimColor>⚔ {championTitle(c)} · Étage {run.biome + 1}/{BIOMES} {run.biomeName}</Text>}
+          ) : <Text dimColor>⚔ {championTitle(c)} · {tr('Étage', 'Floor')} {run.biome + 1}/{BIOMES} {run.biomeName}</Text>}
           {top}
           {arena}
           {sessionLine()}
@@ -1021,9 +1056,9 @@ export const register: Register = on => {
                   ? run.boons.map(b => BOONS.find(one => one.id === b.id)).find(one => one && !one.duo && one.slot === def.slot)
                   : undefined
                 const owned = def.isItem ? (run.items ?? []).filter(id => id === def.id).length : 0
-                const badge = def.isItem ? 'OBJET' : def.duo ? 'DUO' : r.label
+                const badge = def.isItem ? tr('OBJET', 'ITEM') : def.duo ? 'DUO' : r.label
                 const badgeColor = def.isItem ? '#d2aa99' : def.duo ? '#c83ca0' : rarityColor(boon.rarity)
-                const kind = def.isItem ? 'objet, se cumule' : def.duo ? `${def.duo[0]} + ${def.duo[1]}` : `${SLOT_LABEL[def.slot] ?? def.slot} · ${def.god}`
+                const kind = def.isItem ? tr('objet, se cumule', 'item, stacks') : def.duo ? `${def.duo[0]} + ${def.duo[1]}` : `${SLOT_LABEL[def.slot] ?? def.slot} · ${def.god}`
                 return (
                   <Box key={`or-${i}`} flexDirection="column">
                     <Box flexDirection="row" columnGap={1}>
@@ -1033,9 +1068,9 @@ export const register: Register = on => {
                     </Box>
                     <Text wrap="truncate-end">
                       <Text>   {def.desc(boonValue(def, boon.rarity, boon.level))}</Text>
-                      {held ? <Text color="#6daa2c"> · niveau {boon.level ?? (held.level ?? 1) + 1}</Text> : null}
-                      {replaced ? <Text color="#d27d2c"> · remplace {replaced.name}</Text> : null}
-                      {owned > 0 ? <Text color="#6daa2c"> · tu l'as ×{owned}</Text> : null}
+                      {held ? <Text color="#6daa2c"> · {tr('niveau', 'level')} {boon.level ?? (held.level ?? 1) + 1}</Text> : null}
+                      {replaced ? <Text color="#d27d2c"> · {tr('remplace', 'replaces')} {replaced.name}</Text> : null}
+                      {owned > 0 ? <Text color="#6daa2c"> · {tr("tu l'as", 'you have')} ×{owned}</Text> : null}
                     </Text>
                   </Box>
                 )
@@ -1049,17 +1084,17 @@ export const register: Register = on => {
               </Box>
             </Box>
           )}
-          {g.isPaused && <Text dimColor wrap="truncate-end">⚔ {championTitle(c)} · niv {c.level} · {run.biomeName} · {BUILD}</Text>}
+          {g.isPaused && <Text dimColor wrap="truncate-end">⚔ {championTitle(c)} · {tr('niv', 'lv')} {c.level} · {run.biomeName} · {BUILD}</Text>}
           {g.isPaused && run.boons.length > 0 && (
             <Text wrap="truncate-end">
-              <Text dimColor>Bienfaits </Text>
+              <Text dimColor>{tr('Bienfaits ', 'Boons ')}</Text>
               {run.boons.map((b, i) => {
                 const def = BOONS.find(one => one.id === b.id)
                 return <Text key={`b${i}`} color={def?.duo ? '#c83ca0' : rarityColor(b.rarity)}>{i > 0 ? ' · ' : ''}{def?.name ?? b.id}{(b.level ?? 1) > 1 ? ` ${b.level}` : ''}</Text>
               })}
             </Text>
           )}
-          {g.isPaused && (run.items ?? []).length > 0 && <Text color="#d2aa99" wrap="truncate-end">{buildSummary(run).split('   ').find(part => part.startsWith('Objets')) ?? ''}</Text>}
+          {g.isPaused && (run.items ?? []).length > 0 && <Text color="#d2aa99" wrap="truncate-end">{buildSummary(run).split('   ').find(part => part.startsWith('Objets') || part.startsWith('Items')) ?? ''}</Text>}
         </Box>
       )
     }
@@ -1071,7 +1106,7 @@ export const register: Register = on => {
           <Box flexDirection="column">
             {g.epilogue.map((line, i) => <Text key={`ep${i}`} bold={i === 0} color={i === 0 ? '#dad45e' : undefined}>{line}</Text>)}
           </Box>
-          {keys([['h', 'Retour au Hall', { k: 'mode', mode: 'hall' }]])}
+          {keys([['h', tr('Retour au Hall', 'Back to the Hall'), { k: 'mode', mode: 'hall' }]])}
           {focusLine}
         </Box>
       )
@@ -1081,7 +1116,7 @@ export const register: Register = on => {
       return (
         <Box flexDirection="column" rowGap={1}>
           {header}
-          <Text bold>🪞 Le Miroir de la Lignée <Text color="#6dc2ca">◆ {g.lineage.eclats}</Text></Text>
+          <Text bold>{tr('🪞 Le Miroir de la Lignée ', '🪞 The Mirror of the Lineage ')}<Text color="#6dc2ca">◆ {g.lineage.eclats}</Text></Text>
           <Box flexDirection="column">
             {MIRROR.map((def, i) => {
               const rank = g.lineage.mirror[def.id] ?? 0
@@ -1089,7 +1124,7 @@ export const register: Register = on => {
               return <Button key={`m-${def.id}`} plain hotkey={String(i + 1)} dimColor={cost === undefined || cost > g.lineage.eclats} label={`${def.name} ${'●'.repeat(rank)}${'○'.repeat(def.costs.length - rank)}  ${def.desc}  ${cost === undefined ? '(max)' : `◆${cost}`}`} onPress={press({ k: 'buy', id: def.id })} />
             })}
           </Box>
-          {keys([['b', 'Retour', { k: 'mode', mode: 'hall' }]])}
+          {keys([['b', tr('Retour', 'Back'), { k: 'mode', mode: 'hall' }]])}
           {focusLine}
         </Box>
       )
@@ -1099,23 +1134,23 @@ export const register: Register = on => {
       return (
         <Box flexDirection="column" rowGap={1}>
           {header}
-          <Text bold>⚔ L'Arsenal <Text color="#6dc2ca">◆ {g.lineage.eclats}</Text></Text>
+          <Text bold>{tr("⚔ L'Arsenal ", '⚔ The Arsenal ')}<Text color="#6dc2ca">◆ {g.lineage.eclats}</Text></Text>
           <Box flexDirection="column">
             {WEAPONS.map((w, i) => {
               const owned = g.lineage.weapons.includes(w.id)
               const isOn = g.lineage.weapon === w.id
-              return <Button key={`w-${w.id}`} plain hotkey={String(i + 1)} dimColor={!owned && w.cost > g.lineage.eclats} label={`${isOn ? '■' : owned ? '□' : '🔒'} ${w.title} « ${w.name} » — attaque : ${w.attack} · spécial : ${w.special}${owned ? '' : `  ◆${w.cost}`}`} onPress={press({ k: 'weapon', id: w.id })} />
+              return <Button key={`w-${w.id}`} plain hotkey={String(i + 1)} dimColor={!owned && w.cost > g.lineage.eclats} label={`${isOn ? '■' : owned ? '□' : '🔒'} ${w.title} ${tr(`« ${w.name} » — attaque : ${w.attack} · spécial : ${w.special}`, `“${w.name}” — attack: ${w.attack} · special: ${w.special}`)}${owned ? '' : `  ◆${w.cost}`}`} onPress={press({ k: 'weapon', id: w.id })} />
             })}
           </Box>
           {aspectsFor(g.lineage, g.lineage.weapon).length > 0 && (
             <Box flexDirection="column">
-              <Text bold>Aspects de l'arme portée</Text>
+              <Text bold>{tr("Aspects de l'arme portée", 'Aspects of the wielded weapon')}</Text>
               {aspectsFor(g.lineage, g.lineage.weapon).slice(0, 2).map((a, i) => (
                 <Button key={`as-${a.id}`} plain hotkey={String(i + 5)} dimColor={!a.isOwned && a.cost > g.lineage.eclats} label={a.label} onPress={press({ k: 'aspect', id: a.id })} />
               ))}
             </Box>
           )}
-          {keys([['b', 'Retour', { k: 'mode', mode: 'hall' }]])}
+          {keys([['b', tr('Retour', 'Back'), { k: 'mode', mode: 'hall' }]])}
           {focusLine}
         </Box>
       )
@@ -1126,15 +1161,15 @@ export const register: Register = on => {
       return (
         <Box flexDirection="column" rowGap={1}>
           {header}
-          <Text bold>⚒ Le Coffre des Reliques <Text dimColor>({c.equipped.length}/{RELIC_SLOTS(c.level)} équipées)</Text></Text>
+          <Text bold>{tr('⚒ Le Coffre des Reliques ', '⚒ The Relic Vault ')}<Text dimColor>({c.equipped.length}/{RELIC_SLOTS(c.level)} {tr('équipées', 'equipped')})</Text></Text>
           <Box flexDirection="column">
-            {relics.length === 0 && <Text dimColor>Aucune relique. Elles naissent des commits (3 sceaux), des gardiens et des Némésis.</Text>}
+            {relics.length === 0 && <Text dimColor>{tr('Aucune relique. Elles naissent des commits (3 sceaux), des gardiens et des Némésis.', 'No relics yet. They are born of commits (3 seals), guardians and Nemeses.')}</Text>}
             {relics.map((relic, i) => {
               const isOn = c.equipped.includes(relic.id)
               return <Button key={`v-${relic.id}`} plain hotkey={String(i + 1)} dimColor={!isOn} label={`${isOn ? '■' : '□'} ${relic.name} — ${relicLabel(relic.effect, relic.value)} · ${relic.origin}`} onPress={press({ k: 'equip', relicId: relic.id })} />
             })}
           </Box>
-          {keys([['b', 'Retour', { k: 'mode', mode: 'hall' }]])}
+          {keys([['b', tr('Retour', 'Back'), { k: 'mode', mode: 'hall' }]])}
           {focusLine}
         </Box>
       )
@@ -1144,12 +1179,12 @@ export const register: Register = on => {
       return (
         <Box flexDirection="column" rowGap={1}>
           {header}
-          <Text bold>📖 Chronique de la Lignée</Text>
+          <Text bold>{tr('📖 Chronique de la Lignée', '📖 Chronicle of the Lineage')}</Text>
           <Box flexDirection="column">
-            {g.lineage.chronicle.length === 0 && <Text dimColor>Rien encore. L'histoire commence.</Text>}
+            {g.lineage.chronicle.length === 0 && <Text dimColor>{tr("Rien encore. L'histoire commence.", 'Nothing yet. The story begins.')}</Text>}
             {g.lineage.chronicle.slice(-12).reverse().map((entry, i) => <Text key={`c${i}`}><Text dimColor>{entry.at.slice(5, 10)} {entry.repo} · </Text>{entry.text}</Text>)}
           </Box>
-          {keys([['b', 'Retour', { k: 'mode', mode: 'hall' }]])}
+          {keys([['b', tr('Retour', 'Back'), { k: 'mode', mode: 'hall' }]])}
           {focusLine}
         </Box>
       )
@@ -1172,19 +1207,19 @@ export const register: Register = on => {
         {header}
         {splash}
         <Box flexDirection="column">
-          <Text bold>🏰 Le Hall des Ancêtres</Text>
-          <Text>{CLASSES[c.cls].label} ({CLASSES[c.cls].stack}, {CLASSES[c.cls].perk}) · PV {s.maxHp} · dégâts ×{s.dmg.toFixed(2)} · XP {c.xp}/{xpToLevel(c.level)}</Text>
-          <Text>Arme : {weapon?.title} « {weapon?.name} » · <Text color="#6dc2ca">◆ {g.lineage.eclats} éclats</Text> · {c.runs} expéditions · {c.victories} victoires · {c.deaths} chutes</Text>
-          {c.scars.length > 0 && <Text color="#d04648">Cicatrices : {c.scars.join(', ')}</Text>}
-          {c.nemeses.map((n, i) => <Text key={`n${i}`} color="#c83ca0">☠ Némésis : {n.name} (rang {n.rank})</Text>)}
+          <Text bold>{tr('🏰 Le Hall des Ancêtres', '🏰 The Hall of Ancestors')}</Text>
+          <Text>{CLASSES[c.cls].label} ({CLASSES[c.cls].stack}, {CLASSES[c.cls].perk}) · {tr('PV', 'HP')} {s.maxHp} · {tr('dégâts', 'damage')} ×{s.dmg.toFixed(2)} · XP {c.xp}/{xpToLevel(c.level)}</Text>
+          <Text>{tr('Arme : ', 'Weapon: ')}{weapon?.title} {tr(`« ${weapon?.name} »`, `“${weapon?.name}”`)} · <Text color="#6dc2ca">◆ {g.lineage.eclats} {tr('éclats', 'shards')}</Text> · {c.runs} {tr('expéditions', 'runs')} · {c.victories} {tr('victoires', 'victories')} · {c.deaths} {tr('chutes', 'falls')}</Text>
+          {c.scars.length > 0 && <Text color="#d04648">{tr('Cicatrices : ', 'Scars: ')}{c.scars.join(', ')}</Text>}
+          {c.nemeses.map((n, i) => <Text key={`n${i}`} color="#c83ca0">{tr(`☠ Némésis : ${n.name} (rang ${n.rank})`, `☠ Nemesis: ${n.name} (rank ${n.rank})`)}</Text>)}
         </Box>
         <Box flexDirection="column">
-          <Text dimColor>Cette session nourrit le donjon :</Text>
-          <Text>📜 {f.reads} lectures · ✎ {f.edits} runes ({f.runeCharge}/{EDITS_PER_RUNE}) · ⚡ {f.fails} erreurs · $ {f.tests} tests verts</Text>
-          <Text>🔏 sceaux {f.seals}/{SEALS_PER_RELIC} · ✧ {f.agents} sous-agents · ◎ {f.webs} recherches</Text>
+          <Text dimColor>{tr('Cette session nourrit le donjon :', 'This session feeds the dungeon:')}</Text>
+          <Text>📜 {f.reads} {tr('lectures', 'reads')} · ✎ {f.edits} runes ({f.runeCharge}/{EDITS_PER_RUNE}) · ⚡ {f.fails} {tr('erreurs', 'errors')} · $ {f.tests} {tr('tests verts', 'green tests')}</Text>
+          <Text>🔏 {tr('sceaux', 'seals')} {f.seals}/{SEALS_PER_RELIC} · ✧ {f.agents} {tr('sous-agents', 'subagents')} · ◎ {f.webs} {tr('recherches', 'searches')}</Text>
           {sessionLine()}
           {(f.errorPool.length > 0 || f.runeOffers > 0 || f.chestPool > 0 || f.familiarPool > 0) && (
-            <Text color="#d27d2c">En attente : {f.errorPool.length} monstres, {f.runeOffers} bienfaits, {f.chestPool} coffres, {f.familiarPool} familiers</Text>
+            <Text color="#d27d2c">{tr(`En attente : ${f.errorPool.length} monstres, ${f.runeOffers} bienfaits, ${f.chestPool} coffres, ${f.familiarPool} familiers`, `Waiting: ${f.errorPool.length} monsters, ${f.runeOffers} boons, ${f.chestPool} chests, ${f.familiarPool} familiars`)}</Text>
           )}
         </Box>
         {g.notice.length > 0 && (
@@ -1192,18 +1227,19 @@ export const register: Register = on => {
             {g.notice.slice(-4).map((line, i) => <Text key={`no${i}`} color="#dad45e">{line}</Text>)}
           </Box>
         )}
-        {camp && <Text color="#6daa2c">⛺ Campement : étage {camp.biome + 1}, « {roomName(camp)} » · PV {camp.hp} · ◆{camp.eclats} en jeu</Text>}
+        {camp && <Text color="#6daa2c">{tr(`⛺ Campement : étage ${camp.biome + 1}, « ${roomName(camp)} » · PV ${camp.hp} · ◆${camp.eclats} en jeu`, `⛺ Camp: floor ${camp.biome + 1}, “${roomName(camp)}” · HP ${camp.hp} · ◆${camp.eclats} at stake`)}</Text>}
         {keys([
-          ...(camp ? [['r', 'Reprendre le camp', { k: 'resume' }] as [string, string, MenuAction]] : []),
-          ['n', camp ? 'Abandonner et repartir' : 'Nouvelle expédition', { k: 'newRun' }],
+          ...(camp ? [['r', tr('Reprendre le camp', 'Resume the camp'), { k: 'resume' }] as [string, string, MenuAction]] : []),
+          ['n', camp ? tr('Abandonner et repartir', 'Abandon and start over') : tr('Nouvelle expédition', 'New run'), { k: 'newRun' }],
           ['a', 'Arsenal', { k: 'mode', mode: 'armory' }],
-          ['m', 'Miroir', { k: 'mode', mode: 'mirror' }],
-          ['v', 'Coffre', { k: 'mode', mode: 'vault' }],
-          ['c', 'Chronique', { k: 'mode', mode: 'chronicle' }],
+          ['m', tr('Miroir', 'Mirror'), { k: 'mode', mode: 'mirror' }],
+          ['v', tr('Coffre', 'Vault'), { k: 'mode', mode: 'vault' }],
+          ['c', tr('Chronique', 'Chronicle'), { k: 'mode', mode: 'chronicle' }],
         ])}
         <Box flexDirection="row" columnGap={2}>
           {focusLine}
-          <Button key="k-x" plain hotkey="x" dimColor label={isMuted ? 'son coupé 🔇' : 'son 🔊'} onPress={() => onKey($, 'x')} />
+          <Button key="k-x" plain hotkey="x" dimColor label={isMuted ? tr('son coupé 🔇', 'sound off 🔇') : tr('son 🔊', 'sound 🔊')} onPress={() => onKey($, 'x')} />
+          <Button key="k-l" plain hotkey="l" dimColor label={tr('langue : FR', 'language: EN')} onPress={() => onKey($, 'l')} />
         </Box>
       </Box>
     )

@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import { startRun } from '../hooks/meta'
-import { ECHO_NAME, addEcho, isLongWork, noteFor } from '../hooks/session'
+import { addEcho, echoName, isLongWork, noteFor } from '../hooks/session'
 import { admit, newMixer, pickSounds, sfxName } from '../hooks/sound'
 import { NOW, fresh } from './driver'
 import { boot, pane, sounds } from './harness'
@@ -28,7 +28,7 @@ test('a long stretch of Claude work grafts one Écho de session onto the floor',
   expect(placed).not.toBe(null)
   const run = placed!.g.run!
   const echo = run.floor[placed!.to]!
-  expect(echo.name).toBe(ECHO_NAME)
+  expect(echo.name).toBe(echoName())
   expect(echo.loot).toEqual(['altar'])
   const from = run.floor[placed!.at]!
   expect(Math.abs(from.x - echo.x) + Math.abs(from.y - echo.y)).toBe(1)

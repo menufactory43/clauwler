@@ -1,6 +1,7 @@
 import type { CombatStats, Src } from './data'
 import type { RGB } from './art'
 import type { Enemy, Live, Proj } from './sim'
+import { tr } from './i18n'
 
 // Build effects: statuses, extra shots, familiars, shields, on-kill bursts.
 // The sim calls these at a few hook points; everything else lives here, so
@@ -128,7 +129,7 @@ function freeze(live: Live, e: Enemy, st: Status) {
   e.t = Math.max(e.t, 1.2)
   e.vx = 0
   e.vy = 0
-  num(live, e.x, e.y - e.r - 6, 'gel', C_CHILL)
+  num(live, e.x, e.y - e.r - 6, tr('gel', 'frozen'), C_CHILL)
 }
 
 function stun(e: Enemy, t: number) {
@@ -292,7 +293,7 @@ export function onPlayerHit(live: Live, e: Enemy, dmg: number, isCrit: boolean) 
   if (h.stun > 0) stun(e, h.stun)
   if (s.execute > 0 && !isBoss(e) && e.hp < e.maxHp * s.execute) {
     e.hp = 0
-    num(live, e.x, e.y - e.r - 8, 'exécuté', C_BURN)
+    num(live, e.x, e.y - e.r - 8, tr('exécuté', 'executed'), C_BURN)
   }
   if (isCrit && s.burnMarks && st.burnT > 0) st.markT = Math.max(st.markT, 3)
 }
@@ -326,7 +327,7 @@ export function onPlayerHurt(live: Live, amount: number, from: Enemy | null): nu
     live.fx.push({ kind: 'ring', x: p.x, y: p.y - 3, ttl: 0.2, max: 0.2, color: C_SHIELD, r: 8 })
     if (left <= 0) {
       p.iframes = Math.max(p.iframes, 0.4)
-      num(live, p.x, p.y - 12, 'bloqué', C_SHIELD)
+      num(live, p.x, p.y - 12, tr('bloqué', 'blocked'), C_SHIELD)
       if (from && s.thorns > 0) fx.jobs.push({ k: 'nova', x: from.x, y: from.y, r: 2, dmg: s.thorns, color: C_POISON, poison: 0 })
       return 0
     }

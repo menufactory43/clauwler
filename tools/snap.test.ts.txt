@@ -25,20 +25,17 @@ test('snap', async ($, on) => {
   if (await ui.find({ key: 'o-0' })) await ui.press({ key: 'o-0' })
   await clock.advance(1500)
   await shot('start')
-  // Walk out through the first door found, then fight with the second stick.
+  // Walk out through the first door found, then fight (the champion strikes by himself).
   for (const key of ['s', 'z', 'd', 'q']) {
     await hold(key, 1600)
     if ((await ui.findAll({ type: 'Text' })).some((t: any) => /Salle des|Couloir|Crypte|Archives|Puits|Galerie|Forge|Chapelle|Erreurs/.test(t.text))) break
   }
   await clock.advance(1200)
   await shot('room')
-  await hold('l', 700)
-  await hold('i', 500)
+  await hold('d', 700)
+  await hold('r', 300)
+  await hold('z', 500)
   await shot('fight')
-  await ui.press({ key: 'p-o' })
-  await clock.advance(200)
-  await shot('zoomed')
-  await ui.press({ key: 'p-o' })
   await ui.press({ key: 'p-p' })
   await clock.advance(200)
   await shot('pause')

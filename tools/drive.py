@@ -9,7 +9,7 @@ env['CLAUDE_CODE_PLUGIN_DIRS'] = os.path.expanduser('~/Clauwler')
 env['CLAUDE_CODE_ENABLE_FUNCTION_HOOKS'] = '1'
 pid, fd = pty.fork()
 if pid == 0:
-    os.chdir(os.path.expanduser('~/Clauwler'))
+    os.chdir(os.environ.get('BENCH_CWD', os.path.expanduser('~/couleur')))
     os.execvpe('claude', ['claude'], env)
 import fcntl, termios, struct
 fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack('HHHH', ROWS, COLS, 0, 0))

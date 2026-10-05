@@ -6,17 +6,21 @@ import { BOONS, CLASSES, MIRROR, RARITY, SLOT_LABEL, WEAPONS, boonValue, relicLa
 import {
   BIOMES, EDITS_PER_RUNE, RELIC_SLOTS, SEALS_PER_RELIC, applyEvent, boot, championTitle,
   combatStats, commitMessage, endSession, isTestCommand, log, menu, onChest, onBuy, onCleared, onDeath, onDescend, onEnter,
-  onKill, onPortal, parseError, prepareRoom, roomName, saveKey, syncHp, toSave, xpToLevel,
+  aspectsFor, buildSummary, offerTitle, onKill, onPortal, parseError, prepareRoom, roomName, saveKey, syncHp, toSave, xpToLevel,
 } from './meta'
 import type { View } from './render'
 import { encodeIndexedPng } from './png'
 import { frameSize, renderFrame, toCells, toQuads } from './render'
 import type { Input, Live } from './sim'
-import { FH, FW, createRoom, inject, step } from './sim'
+import { FH, FW, ROOM, createRoom, doorAt, inject, step } from './sim'
+import type { SessionNote } from './session'
+import { COMMIT_ECLATS, ECHO_NAME, TEST_HEAL, TEST_SHARDS, addEcho, isLongWork, narratorLine, noteFor } from './session'
+import type { Sfx } from './sound'
+import { SIGNAL_SFX, gainOf, newMixer, pickSounds } from './sound'
 
 const PANE = 'clauwler'
 /** Shown in the pane, so a reload can be told from a stale module. */
-const BUILD = 'v0.7'
+const BUILD = 'v0.9'
 const FPS = 24
 const IDLE_MS = 8000
 const game = atom({ plugin: 'clauwler', key: 'game' } as const, null)
@@ -62,6 +66,86 @@ let lastKeyId = 0
 const held = { up: 0, down: 0, left: 0, right: 0 }
 const aim = { up: 0, down: 0, left: 0, right: 0 }
 const edges = { attack: false, special: false, cast: false, dash: false }
+
+// ---------- sound ----------
+
+/** Muted with X, kept in the store. */
+let isMuted = false
+/** Sounds asked for since the last flush: the sim's own (`live.sfx`) join them there. */
+let pendingSfx: string[] = []
+const mixer = newMixer()
+/** Plays that failed in a row: a terminal with no player stops being asked. */
+let audioFails = 0
+
+function queueSfx(name: Sfx | string | undefined) {
+  if (!name) return
+  pendingSfx.push(name)
+  if (pendingSfx.length > 12) pendingSfx = pendingSfx.slice(-12)
+}
+
+/** Starts the waiting sounds without waiting on them: never in the loop's way. */
+function flushSfx($: EngineInterface, t: number, isHeard: boolean) {
+  const own = (live as unknown as { sfx?: string[] } | null)?.sfx
+  if (Array.isArray(own) && own.length > 0) {
+    pendingSfx.push(...own)
+    own.length = 0
+  }
+  if (pendingSfx.length === 0) return
+  const names = pendingSfx
+  pendingSfx = []
+  if (isMuted || !isHeard || audioFails >= 3) return
+  for (const name of pickSounds(mixer, names, t)) {
+    try {
+      void $.audio.play({ asset: `assets/sfx/${name}.wav` }, { gain: gainOf(name) }).then(() => { audioFails = 0 }, () => { audioFails += 1 })
+    } catch {
+      audioFails += 1
+    }
+  }
+}
+
+/** What the last tick saw, for a sim that does not name its own sounds (no `live.sfx`). */
+const seen = { room: null as Live | null, hp: 0, isDashing: false, foeHp: 0, foes: 0, shot: 0, isBoss: false, bossPart: 1 }
+
+/** Hears the fight from the outside: hurt, dash, hits, shots, the guardian's entrance. */
+function listen(l: Live) {
+  if (Array.isArray((l as unknown as { sfx?: unknown }).sfx)) return
+  const p = l.player
+  let foeHp = 0
+  let isBoss = false
+  let bossPart = 1
+  for (const e of l.enemies) {
+    if (e.state === 'spawn') continue
+    foeHp += e.hp
+    if (e.type === 'boss') {
+      isBoss = true
+      bossPart = e.hp / Math.max(1, e.maxHp)
+    }
+  }
+  let shot = 0
+  for (const pr of l.projs) if (pr.team === 'p' && pr.id > shot) shot = pr.id
+  if (seen.room === l) {
+    if (p.hp < seen.hp - 0.5) queueSfx(p.hp <= 0 ? 'death' : 'hurt')
+    if (p.dashT > 0 && !seen.isDashing) queueSfx('dash')
+    if (shot > seen.shot) queueSfx('shoot')
+    // Fewer foes standing: the kill signal sounds it; less health on the same foes: a hit.
+    if (foeHp < seen.foeHp - 0.5 && l.enemies.length >= seen.foes) queueSfx('hit')
+    if (isBoss && !seen.isBoss) queueSfx('boss')
+    // The guardian past half its health changes its ways.
+    if (isBoss && seen.bossPart > 0.5 && bossPart <= 0.5) queueSfx('phase')
+  }
+  Object.assign(seen, { room: l, hp: p.hp, isDashing: p.dashT > 0, foeHp, foes: l.enemies.length, shot, isBoss, bossPart })
+}
+
+// ---------- the session, as the pane tells it ----------
+
+/** The last session event and what it did in the game. */
+let sessionNote: SessionNote | null = null
+/** Claude's main-loop work since the last Écho de session, in ms. */
+let workMs = 0
+
+/** Rarity colors, Commun to the rarest the data may add. */
+const RARITY_COLORS = ['#deeed6', '#597dce', '#c83ca0', '#d27d2c', '#dad45e']
+const rarityColor = (r: number) => RARITY_COLORS[Math.max(0, Math.min(RARITY_COLORS.length - 1, r))]!
 
 const B64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
 
@@ -142,7 +226,11 @@ async function change($: EngineInterface, fn: (g: GameState) => GameState, isEnd
   mirror = g
   await persist($, g, isEnded)
   const relic = g?.lineage.vault[g.lineage.vault.length - 1]
-  if (before && g && relic && g.lineage.vault.length > before.lineage.vault.length) $.ui.toast(`⚒ Relique forgée : ${relic.name}`)
+  if (before && g && relic && g.lineage.vault.length > before.lineage.vault.length) {
+    $.ui.toast(`⚒ Relique forgée : ${relic.name}`)
+    queueSfx('seal')
+  }
+  if (before && g && g.champion.level > before.champion.level) queueSfx('levelup')
   if (g && live) {
     // Boons, levels and relics change the numbers mid-room.
     const s = combatStats(g)
@@ -188,6 +276,7 @@ async function start($: EngineInterface, isOpening: boolean) {
   // Real pixels wherever the terminal draws them, as Claude Code itself decides; a cell
   // mode picked with O or G holds for this session and in terminals without pictures.
   const saved = await $.store.get('gfx')
+  isMuted = (await $.store.get('mute')) === true
   const term = (await $.env.get('TERM').catch(() => undefined)) ?? ''
   const program = (await $.env.get('TERM_PROGRAM').catch(() => undefined)) ?? ''
   const canPicture = term === 'xterm-ghostty' || term.includes('kitty') || /^(ghostty|WezTerm)$/i.test(program)
@@ -312,6 +401,7 @@ async function tick($: EngineInterface) {
       await change($, s => ({ ...s, isPaused: true }))
     } else {
       step(live, moveInput(t), dt)
+      listen(live)
       needsFrame = true
       if (live.signals.length > 0 && !isHandling) {
         isHandling = true
@@ -323,6 +413,8 @@ async function tick($: EngineInterface) {
       }
     }
   }
+  // Heard only while the champion plays in the focused pane.
+  flushSfx($, t, wasFocused && !mirror?.isPaused)
   if (live && t - lastHudAt > 250) {
     const s = live.stats
     const boss = live.enemies.find(e => e.type === 'boss' && e.state !== 'spawn')
@@ -378,6 +470,7 @@ async function tick($: EngineInterface) {
 async function handleSignals($: EngineInterface) {
   while (live && live.signals.length > 0) {
     const sig = live.signals.shift()!
+    queueSfx(SIGNAL_SFX[sig.k])
     const hp = Math.max(0, Math.round(live.player.hp))
     switch (sig.k) {
       case 'kill': await change($, g => onKill(g, sig, now())); break
@@ -434,6 +527,9 @@ const HALL_KEYS: Record<string, MenuAction> = {
 
 async function play($: EngineInterface, a: MenuAction) {
   const before = mirror
+  // A menu answers with a click, a chosen boon with a fanfare.
+  queueSfx(a.k === 'pick' ? 'levelup' : a.k === 'newRun' || a.k === 'resume' ? 'door' : 'menu')
+  flushSfx($, await $.clock.now(), true)
   const g = await change($, s => menu(s, a, now(), seed()))
   if (!g) return
   const isStarting = (a.k === 'newRun' || a.k === 'resume') && g.mode === 'run'
@@ -442,10 +538,27 @@ async function play($: EngineInterface, a: MenuAction) {
 }
 
 async function onKey($: EngineInterface, key: string) {
+  await handleKey($, key)
+  // A key means the pane is focused: menus are heard at once, outside the loop.
+  if (mirror?.mode !== 'run' || mirror.run?.offer || !live) flushSfx($, await $.clock.now(), true)
+}
+
+async function handleKey($: EngineInterface, key: string) {
   const g = mirror
   if (!g) return
   const t = (await $.clock.now())
   lastInputAt = t
+  if (key === 'x') {
+    isMuted = !isMuted
+    pendingSfx = []
+    await $.store.set('mute', isMuted)
+    if (!isMuted) {
+      queueSfx('menu')
+      flushSfx($, t, true)
+    }
+    await change($, s => ({ ...s }))
+    return
+  }
   if (key === 'g' || key === 'o') {
     gfx = key === 'g' ? (gfx === 'image' ? 'quads' : 'image') : gfx === 'quads' ? 'half' : 'quads'
     await $.store.set('gfx', gfx)
@@ -500,7 +613,11 @@ async function onKey($: EngineInterface, key: string) {
   if (/^[1-9]$/.test(key)) {
     const i = Number(key) - 1
     if (g.mode === 'mirror' && MIRROR[i]) await play($, { k: 'buy', id: MIRROR[i]!.id })
-    if (g.mode === 'armory' && WEAPONS[i]) await play($, { k: 'weapon', id: WEAPONS[i]!.id })
+    if (g.mode === 'armory' && i < 4 && WEAPONS[i]) await play($, { k: 'weapon', id: WEAPONS[i]!.id })
+    if (g.mode === 'armory' && i >= 4) {
+      const aspect = aspectsFor(g.lineage, g.lineage.weapon)[i - 4]
+      if (aspect) await play($, { k: 'aspect', id: aspect.id })
+    }
     const relic = g.lineage.vault.slice(-9)[i]
     if (g.mode === 'vault' && relic) await play($, { k: 'equip', relicId: relic.id })
     return
@@ -549,8 +666,116 @@ function toEvent(tool: string, input: Record<string, unknown>, ran: { deny?: str
 
 async function feed($: EngineInterface, ev: SessionEvent) {
   const isLive = live !== null && mirror?.mode === 'run'
-  await change($, g => applyEvent(g, ev, now(), isLive))
-  if (isLive && live) inject(live, ev)
+  const isOpen = isLive && !!live && !live.isCleared
+  const heal = live ? Math.max(3, Math.round(live.stats.maxHp * TEST_HEAL)) : 0
+  await change($, g => {
+    const next = applyEvent(g, ev, now(), isLive)
+    const forged = next.lineage.vault.length > g.lineage.vault.length ? next.lineage.vault[next.lineage.vault.length - 1]?.name : undefined
+    // A commit pays at once, beside its seal: the session gives, it never takes.
+    if (ev.kind === 'commit' && isLive && next.run) next.run.eclats += COMMIT_ECLATS
+    sessionNote = noteFor(ev, { isLive, isOpen, seals: next.feed.seals, relic: forged, heal })
+    return next
+  })
+  if (!isLive || !live) return
+  const before = live.enemies.length
+  inject(live, ev)
+  sessionLive(live, ev, before, heal, sessionNote)
+}
+
+/** What a session event looks like in the room being fought, beside what `inject` does. */
+function sessionLive(l: Live, ev: SessionEvent, before: number, heal: number, note: SessionNote | null) {
+  const p = l.player
+  switch (ev.kind) {
+    case 'fail': {
+      const foe = l.enemies.length > before ? l.enemies[l.enemies.length - 1] : undefined
+      if (!foe) return
+      // The rift the error crawls out of.
+      l.fx.push({ kind: 'ring', x: foe.x, y: foe.y, ttl: 0.9, max: 0.9, color: [200, 60, 160], r: 18 })
+      l.fx.push({ kind: 'tele', x: foe.x, y: foe.y, r: 12, ttl: 0.7, max: 0.7, color: [200, 60, 160] })
+      l.banner = { text: `Faille : ${ev.sig}`, ttl: 1.8 }
+      l.shake = Math.max(l.shake, 0.25)
+      queueSfx('rift')
+      break
+    }
+    case 'test': {
+      p.hp = Math.min(l.stats.maxHp, p.hp + heal)
+      l.fx.push({ kind: 'num', x: p.x, y: p.y - 12, ttl: 1, max: 1, color: [109, 170, 44], text: `+${heal}` })
+      l.fx.push({ kind: 'ring', x: p.x, y: p.y - 2, ttl: 0.5, max: 0.5, color: [109, 170, 44], r: 20 })
+      for (let i = 0; i < TEST_SHARDS; i++) {
+        const a = (i / TEST_SHARDS) * Math.PI * 2 + 0.4
+        const x = Math.round(Math.min(ROOM.x1 - 6, Math.max(ROOM.x0 + 6, p.x + Math.cos(a) * 14)))
+        const y = Math.round(Math.min(ROOM.y1 - 6, Math.max(ROOM.y0 + 6, p.y + Math.sin(a) * 10)))
+        l.pickups.push({ x, y, kind: 'shard', t: 0 })
+      }
+      l.banner = { text: 'Tests verts !', ttl: 1.4 }
+      queueSfx('heal')
+      break
+    }
+    case 'commit':
+      l.fx.push({ kind: 'num', x: p.x, y: p.y - 12, ttl: 1.1, max: 1.1, color: [109, 194, 202], text: `+${COMMIT_ECLATS}` })
+      l.fx.push({ kind: 'ring', x: p.x, y: p.y - 2, ttl: 0.6, max: 0.6, color: [218, 212, 94], r: 24 })
+      l.banner = { text: note?.effect.startsWith('relique') ? 'Relique forgée !' : `Sceau de commit ${note?.effect.match(/\d\/\d/)?.[0] ?? ''}`.trim(), ttl: 1.6 }
+      queueSfx('seal')
+      break
+    case 'agent':
+    case 'web':
+      queueSfx('boon')
+      break
+    case 'compact':
+      queueSfx('explode')
+      break
+    default:
+      break
+  }
+}
+
+/** Claude ended a main-loop turn: the Narrator speaks, the champion gets a breath; long work opens an Écho. */
+async function onTurn($: EngineInterface, durationMs: number, turnId: string) {
+  const g = mirror
+  if (!g) return
+  workMs += Math.max(0, durationMs)
+  const line = narratorLine(hashText(turnId))
+  const isLive = live !== null && g.mode === 'run' && !!g.run
+  if (isLive && live) {
+    const s = live.stats
+    const heal = Math.max(2, Math.round(s.maxHp * 0.05))
+    live.ammo = s.castAmmo
+    live.player.hp = Math.min(s.maxHp, live.player.hp + heal)
+    live.fx.push({ kind: 'num', x: live.player.x, y: live.player.y - 12, ttl: 0.9, max: 0.9, color: [218, 212, 94], text: `+${heal}` })
+    sessionNote = { icon: '✒', what: 'Claude a fini son tour', effect: `pouvoir rechargé, +${heal} PV`, color: '#dad45e' }
+    await change($, s0 => log(s0, `✒ Le Narrateur : ${line}`))
+    queueSfx('narrator')
+  } else {
+    sessionNote = { icon: '✒', what: 'Claude a fini son tour', effect: line, color: '#dad45e' }
+  }
+  if (!isLongWork(durationMs, workMs)) {
+    if (!isLive) await change($, s0 => ({ ...s0 }))
+    return
+  }
+  workMs = 0
+  let placed: ReturnType<typeof addEcho> = null
+  await change($, s0 => {
+    if (!s0.run) {
+      // No run: the long work waits as a boon for the next descent.
+      sessionNote = { icon: '✧', what: 'longue session de Claude', effect: 'un bienfait t\'attend à la prochaine expédition', color: '#c83ca0' }
+      return { ...s0, feed: { ...s0.feed, runeOffers: s0.feed.runeOffers + 1 } }
+    }
+    placed = addEcho(s0)
+    if (placed) sessionNote = { icon: '✧', what: 'longue session de Claude', effect: `un ${ECHO_NAME} apparaît sur la carte (autel à bienfait)`, color: '#c83ca0' }
+    return placed?.g ?? s0
+  })
+  const echo = placed as ReturnType<typeof addEcho>
+  if (echo && live && mirror?.run && echo.at === mirror.run.cur) {
+    live.doors.push({ side: echo.side, to: echo.to, kind: 'treasure', ...doorAt(echo.side) })
+    live.banner = { text: 'Un écho de session s\'ouvre', ttl: 1.8 }
+  }
+  if (echo) queueSfx('boon')
+}
+
+function hashText(text: string): number {
+  let h = 2166136261
+  for (let i = 0; i < text.length; i++) h = Math.imul(h ^ text.charCodeAt(i), 16777619)
+  return h >>> 0
 }
 
 // ---------- the hooks ----------
@@ -610,8 +835,14 @@ export const register: Register = on => {
 
   on('turn.complete', async ($, e, next) => {
     const result = await next(e)
-    if (e.agentId === undefined && mirror?.mode === 'run' && (await $.clock.now()) - lastInputAt < 4000) {
+    if (e.agentId !== undefined) return result
+    if (mirror?.mode === 'run' && (await $.clock.now()) - lastInputAt < 4000) {
       $.ui.toast('Claude a fini son tour. Esc pour lui répondre (le jeu se met en pause).')
+    }
+    try {
+      if (e.reason === 'answer') await onTurn($, e.durationMs, e.turnId)
+    } catch {
+      // The game never gets in the way of the work.
     }
     return result
   })
@@ -658,6 +889,7 @@ export const register: Register = on => {
           const room = run.floor[i]
           const [glyph, color] = !room ? ['  ', undefined]
             : i === run.cur ? ['◆ ', '#dad45e']
+              : room.name === ECHO_NAME ? ['✧ ', '#c83ca0']
               : room.kind === 'boss' ? ['☠ ', '#d04648']
                 : room.kind === 'treasure' ? ['★ ', '#dad45e']
                   : room.kind === 'shop' ? ['$ ', '#6dc2ca']
@@ -670,13 +902,20 @@ export const register: Register = on => {
       return <Box flexDirection="column" flexShrink={0}>{rows}</Box>
     }
     const focusLine = isFocused
-      ? <Text color="#6daa2c" bold>🎮 Tu joues · Esc pour écrire à Claude <Text dimColor>· {BUILD}</Text></Text>
+      ? <Text color="#6daa2c" bold>🎮 Tu joues · Esc → Claude <Text dimColor>{BUILD}</Text></Text>
       : <Text color="#dad45e" bold>⌨  Claude a la main · ctrl+x tab (ou /clauwler) pour jouer</Text>
-    const pad = (list: [string, string][]) => (
-      <Box flexDirection="row" flexWrap="wrap" columnGap={2}>
-        {list.map(([hotkey, label]) => <Button key={`p-${hotkey}`} plain hotkey={hotkey} label={label} dimColor={!isFocused} onPress={() => onKey($, hotkey)} />)}
-      </Box>
-    )
+    const sessionLine = () => {
+      const note = sessionNote
+      return (
+        <Text wrap="truncate-end">
+          <Text dimColor>Session </Text>
+          {note
+            ? <Text color={note.color} bold>{note.icon} {note.what}</Text>
+            : <Text color="#4e4a4e">⚡ en veille</Text>}
+          <Text dimColor> → {note ? note.effect : 'erreurs, tests et commits de Claude nourrissent le donjon'}</Text>
+        </Text>
+      )
+    }
 
     perf.panes++
     if (g.mode === 'run' && g.run) {
@@ -717,55 +956,92 @@ export const register: Register = on => {
         const full = Math.max(0, Math.min(n, Math.round(part * n)))
         return '█'.repeat(full) + '░'.repeat(n - full)
       }
-      const status = g.isPaused
+      const top = g.isPaused
         ? <Text bold color="#dad45e">⏸ PAUSE · une touche pour reprendre</Text>
         : run.offer
-          ? <Text bold color="#dad45e">✦ Choisis un bienfait : 1, 2 ou 3</Text>
-          : hud?.banner
-            ? <Text bold color="#dad45e">{hud.banner}</Text>
-            : <Text> </Text>
+          ? <Text bold color="#dad45e">✦ Choisis : {run.offer.map((_, i) => i + 1).join(', ')}</Text>
+          : hud?.boss
+            ? <Text color="#d04648" bold wrap="truncate-end">☠ {hud.boss.name} {bar(hud.boss.pct / 100, 16)} {hud.boss.pct}%{hud.banner ? <Text color="#dad45e"> · {hud.banner}</Text> : null}</Text>
+            : hud?.banner
+              ? <Text bold color="#dad45e" wrap="truncate-end">{hud.banner}</Text>
+              : <Text> </Text>
+      const shield = Math.floor(live?.effects?.shield ?? 0)
+      const runPad: [string, string][] = [['z', '↑'], ['q', '←'], ['s', '↓'], ['d', '→'], ['e', 'esquive'], ['r', 'pouvoir'], ['p', 'pause'], ['h', 'camp'], ['x', isMuted ? 'son coupé' : 'son']]
       return (
         <Box flexDirection="column">
-          {header}
-          <Text dimColor wrap="truncate-end">Étage {run.biome + 1}/{BIOMES} {run.biomeName} · « {roomName(run)} »</Text>
-          {hud && (
+          <Text wrap="truncate-end">
+            <Text bold color="#dad45e">⚔ {championTitle(c)} </Text>
+            <Text dimColor>niv {c.level} · Étage {run.biome + 1}/{BIOMES} {run.biomeName} · « {roomName(run)} »</Text>
+          </Text>
+          {hud ? (
             <Text wrap="truncate-end">
-              <Text color="#d04648">♥ {bar(hud.hp / Math.max(1, hud.maxHp), 12)}</Text>
+              <Text color="#d04648">♥ {bar(hud.hp / Math.max(1, hud.maxHp), 10)}</Text>
               <Text bold> {hud.hp}/{hud.maxHp}</Text>
-              <Text color="#6dc2ca">   ◆ {run.eclats}</Text>
-              <Text color="#597dce">   R pouvoir {'▮'.repeat(hud.ammo)}{'▯'.repeat(Math.max(0, hud.maxAmmo - hud.ammo))}</Text>
-              <Text color={hud.isDashReady ? '#6dc2ca' : '#4e4a4e'}>   E esquive {hud.isDashReady ? '●' : '○'}</Text>
-              <Text color="#dad45e">   ✦ {run.boons.length}</Text>
+              {shield > 0 ? <Text color="#8595a1"> ⛨ {shield}</Text> : null}
+              <Text color="#6dc2ca">  ◆ {run.eclats}</Text>
+              <Text color="#597dce">  R {'▮'.repeat(hud.ammo)}{'▯'.repeat(Math.max(0, hud.maxAmmo - hud.ammo))}</Text>
+              <Text color={hud.isDashReady ? '#6dc2ca' : '#4e4a4e'}>  E {hud.isDashReady ? '●' : '○'}</Text>
+              <Text color="#dad45e">  ✦ {run.boons.length}</Text>
+              <Text dimColor>  {isMuted ? '🔇' : '🔊'}</Text>
             </Text>
-          )}
-          {hud?.boss && <Text color="#d04648" bold wrap="truncate-end">☠ {hud.boss.name} {bar(hud.boss.pct / 100, 20)} {hud.boss.pct}%</Text>}
-          {status}
+          ) : <Text> </Text>}
+          {top}
           {arena}
-          {focusLine}
-          {run.offer ? null : pad([['z', '↑'], ['q', '←'], ['s', '↓'], ['d', '→'], ['e', 'esquive'], ['r', 'pouvoir'], ['p', 'pause'], ['h', 'camp']])}
+          {sessionLine()}
+          <Box flexDirection="row" flexWrap="wrap" columnGap={2}>
+            {focusLine}
+            {run.offer ? null : runPad.map(([hotkey, label]) => <Button key={`p-${hotkey}`} plain hotkey={hotkey} label={label} dimColor={!isFocused} onPress={() => onKey($, hotkey)} />)}
+          </Box>
           {run.offer ? (
             <Box flexDirection="column" marginTop={1}>
-              <Text bold color="#dad45e">✦ Un dieu du dépôt t'offre un bienfait (1, 2 ou 3) :</Text>
+              <Text bold color="#dad45e" wrap="truncate-end">{offerTitle(run)}</Text>
               {run.offer.map((boon, i) => {
                 const def = BOONS.find(one => one.id === boon.id)
-                if (!def) return null
+                if (!def) return <Button key={`o-${i}`} plain hotkey={String(i + 1)} label={boon.id} onPress={press({ k: 'pick', i })} />
                 const r = RARITY[boon.rarity] ?? RARITY[0]!
-                const replaces = def.slot !== 'passive' ? run.boons.find(b => BOONS.find(one => one.id === b.id)?.slot === def.slot) : undefined
-                const label = `[${r.label}] ${SLOT_LABEL[def.slot]} · ${def.god} — ${def.name} : ${def.desc(boonValue(def, boon.rarity))}${replaces ? ' (remplace l\'actuel)' : ''}`
-                return <Button key={`o-${i}`} plain hotkey={String(i + 1)} label={label} onPress={press({ k: 'pick', i })} />
+                const held = run.boons.find(b => b.id === def.id)
+                const replaced = !held && !def.isItem && def.slot !== 'passive' && (def.slot as string) !== 'item'
+                  ? run.boons.map(b => BOONS.find(one => one.id === b.id)).find(one => one && !one.duo && one.slot === def.slot)
+                  : undefined
+                const owned = def.isItem ? (run.items ?? []).filter(id => id === def.id).length : 0
+                const badge = def.isItem ? 'OBJET' : def.duo ? 'DUO' : r.label
+                const badgeColor = def.isItem ? '#d2aa99' : def.duo ? '#c83ca0' : rarityColor(boon.rarity)
+                const kind = def.isItem ? 'objet, se cumule' : def.duo ? `${def.duo[0]} + ${def.duo[1]}` : `${SLOT_LABEL[def.slot] ?? def.slot} · ${def.god}`
+                return (
+                  <Box key={`or-${i}`} flexDirection="column">
+                    <Box flexDirection="row" columnGap={1}>
+                      <Button key={`o-${i}`} plain hotkey={String(i + 1)} label={def.name} onPress={press({ k: 'pick', i })} />
+                      <Text color={badgeColor} bold>{def.duo ? '⚭ ' : def.isItem ? '★ ' : ''}{badge}</Text>
+                      <Text dimColor wrap="truncate-end">{kind}</Text>
+                    </Box>
+                    <Text wrap="truncate-end">
+                      <Text>   {def.desc(boonValue(def, boon.rarity, boon.level))}</Text>
+                      {held ? <Text color="#6daa2c"> · niveau {boon.level ?? (held.level ?? 1) + 1}</Text> : null}
+                      {replaced ? <Text color="#d27d2c"> · remplace {replaced.name}</Text> : null}
+                      {owned > 0 ? <Text color="#6daa2c"> · tu l'as ×{owned}</Text> : null}
+                    </Text>
+                  </Box>
+                )
               })}
             </Box>
           ) : (
-            <Box flexDirection="row" marginTop={1} columnGap={2}>
+            <Box flexDirection="row" columnGap={2}>
               {minimap(run)}
               <Box flexDirection="column" flexShrink={1}>
-                {run.log.slice(-4).map((line, i, all) => <Text key={`l${i}`} dimColor={i < all.length - 1} wrap="truncate-end">{line}</Text>)}
+                {run.log.slice(-3).map((line, i, all) => <Text key={`l${i}`} dimColor={i < all.length - 1} wrap="truncate-end">{line}</Text>)}
               </Box>
             </Box>
           )}
           {run.boons.length > 0 && (
-            <Text dimColor wrap="truncate-end">Bienfaits : {run.boons.map(b => BOONS.find(one => one.id === b.id)?.name).join(' · ')}</Text>
+            <Text wrap="truncate-end">
+              <Text dimColor>Bienfaits </Text>
+              {run.boons.map((b, i) => {
+                const def = BOONS.find(one => one.id === b.id)
+                return <Text key={`b${i}`} color={def?.duo ? '#c83ca0' : rarityColor(b.rarity)}>{i > 0 ? ' · ' : ''}{def?.name ?? b.id}{(b.level ?? 1) > 1 ? ` ${b.level}` : ''}</Text>
+              })}
+            </Text>
           )}
+          {(run.items ?? []).length > 0 && <Text color="#d2aa99" wrap="truncate-end">{buildSummary(run).split('   ').find(part => part.startsWith('Objets')) ?? ''}</Text>}
         </Box>
       )
     }
@@ -813,6 +1089,14 @@ export const register: Register = on => {
               return <Button key={`w-${w.id}`} plain hotkey={String(i + 1)} dimColor={!owned && w.cost > g.lineage.eclats} label={`${isOn ? '■' : owned ? '□' : '🔒'} ${w.title} « ${w.name} » — attaque : ${w.attack} · spécial : ${w.special}${owned ? '' : `  ◆${w.cost}`}`} onPress={press({ k: 'weapon', id: w.id })} />
             })}
           </Box>
+          {aspectsFor(g.lineage, g.lineage.weapon).length > 0 && (
+            <Box flexDirection="column">
+              <Text bold>Aspects de l'arme portée</Text>
+              {aspectsFor(g.lineage, g.lineage.weapon).slice(0, 2).map((a, i) => (
+                <Button key={`as-${a.id}`} plain hotkey={String(i + 5)} dimColor={!a.isOwned && a.cost > g.lineage.eclats} label={a.label} onPress={press({ k: 'aspect', id: a.id })} />
+              ))}
+            </Box>
+          )}
           {keys([['b', 'Retour', { k: 'mode', mode: 'hall' }]])}
           {focusLine}
         </Box>
@@ -880,6 +1164,7 @@ export const register: Register = on => {
           <Text dimColor>Cette session nourrit le donjon :</Text>
           <Text>📜 {f.reads} lectures · ✎ {f.edits} runes ({f.runeCharge}/{EDITS_PER_RUNE}) · ⚡ {f.fails} erreurs · $ {f.tests} tests verts</Text>
           <Text>🔏 sceaux {f.seals}/{SEALS_PER_RELIC} · ✧ {f.agents} sous-agents · ◎ {f.webs} recherches</Text>
+          {sessionLine()}
           {(f.errorPool.length > 0 || f.runeOffers > 0 || f.chestPool > 0 || f.familiarPool > 0) && (
             <Text color="#d27d2c">En attente : {f.errorPool.length} monstres, {f.runeOffers} bienfaits, {f.chestPool} coffres, {f.familiarPool} familiers</Text>
           )}
@@ -898,7 +1183,10 @@ export const register: Register = on => {
           ['v', 'Coffre', { k: 'mode', mode: 'vault' }],
           ['c', 'Chronique', { k: 'mode', mode: 'chronicle' }],
         ])}
+        <Box flexDirection="row" columnGap={2}>
           {focusLine}
+          <Button key="k-x" plain hotkey="x" dimColor label={isMuted ? 'son coupé 🔇' : 'son 🔊'} onPress={() => onKey($, 'x')} />
+        </Box>
       </Box>
     )
   })

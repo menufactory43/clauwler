@@ -4,7 +4,8 @@ export type ClassId = 'artificier' | 'forgeron' | 'illusionniste' | 'alchimiste'
 
 export type WeaponId = 'epee' | 'lance' | 'arc' | 'bouclier'
 
-export type Slot = 'attack' | 'special' | 'cast' | 'dash' | 'passive'
+/** `item`: Isaac items (treasure, shop), held apart from the boons. */
+export type Slot = 'attack' | 'special' | 'cast' | 'dash' | 'passive' | 'item'
 
 export type StatKey = 'maxHp' | 'atk' | 'crit' | 'lifesteal' | 'thorns' | 'dodge' | 'nectar'
 
@@ -44,6 +45,10 @@ export type Lineage = {
   runs: number
   weapons: WeaponId[]
   weapon: WeaponId
+  /** Weapon aspects bought in the Arsenal (ids from ASPECTS). */
+  aspects?: string[]
+  /** The aspect worn on each weapon; none is the plain weapon. */
+  aspectOn?: Partial<Record<WeaponId, string>>
 }
 
 export type ErrorSpawn = { sig: string; name: string }
@@ -70,7 +75,8 @@ export type Feed = {
 
 export type Reward = 'boon' | 'eclats' | 'heal' | 'vigor' | 'boss' | 'none'
 
-export type BoonInst = { id: string; rarity: number }
+/** A boon, duo or item held or offered. `level` (default 1) grows when taken again. */
+export type BoonInst = { id: string; rarity: number; level?: number }
 
 export type Side = 'n' | 's' | 'e' | 'w'
 
@@ -85,7 +91,7 @@ export type FloorRoom = {
   isCleared: boolean
   isSeen: boolean
   isVisited: boolean
-  /** What is still to take here: `altar`, `shopHeart`, `shopBoon`. */
+  /** What is still to take here: `altar` (item pedestal), `shopHeart`, `shopBoon`, `shopItem`. */
   loot: string[]
 }
 
@@ -107,6 +113,12 @@ export type RunProgress = {
   defiance: number
   offer: BoonInst[] | null
   offerQueue: number
+  /** Items held, one entry per copy: they stack. */
+  items?: string[]
+  /** Item pedestals waiting (treasure, shop), like offerQueue for boons. */
+  itemQueue?: number
+  /** The weapon aspect worn for this run. */
+  aspect?: string
   kills: number
   slain: string[]
   log: string[]
@@ -149,6 +161,8 @@ export type MenuAction =
   | { k: 'buy'; id: string }
   | { k: 'equip'; relicId: string }
   | { k: 'weapon'; id: WeaponId }
+  /** Arsenal: buy an aspect with shards, or wear / take it off. */
+  | { k: 'aspect'; id: string }
   | { k: 'pick'; i: number }
 
 /** What the input strip posts: the last keys, numbered, so none is lost. */

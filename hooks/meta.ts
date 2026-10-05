@@ -2,10 +2,11 @@ import type {
   BoonInst, Champion, ClassId, Ctx, ErrorSpawn, Feed, FloorRoom, GameState, Lineage, MenuAction, Nemesis, Relic,
   RoomKind, RunProgress, Save, SessionEvent, Side, WeaponId,
 } from '../types'
-import type { CombatStats } from './data'
+import type { BoonDef, CombatStats } from './data'
 import {
-  BOONS, BOSSES, CLASSES, DEFAULT_BIOMES, DEFAULT_CHAMBERS, ERROR_EPITHETS, ERROR_NAMES, MIRROR,
-  RELIC_EFFECTS, WEAPONS, applyRelic, baseStats, boonValue, championName, hash, relicLabel,
+  ASPECTS, BOONS, BOSSES, CLASSES, DEFAULT_BIOMES, DEFAULT_CHAMBERS, DUO_BOONS, DUO_RARITY, ERROR_EPITHETS, ERROR_NAMES,
+  GOD_BOONS, GOD_STATUS, ITEMS, ITEM_RARITY, MIRROR, RARITY, RELIC_EFFECTS, SLOT_LABEL, WEAPONS, applyRelic, baseStats,
+  boonValue, championName, hash, relicLabel,
 } from './data'
 import type { BossSpec, RoomSpec } from './sim'
 
@@ -74,13 +75,22 @@ export function combatStats(g: GameState): CombatStats {
   const run = g.run
   if (run) {
     s.maxHp += run.bonusHp
+    const aspect = ASPECTS.find(one => one.id === run.aspect && one.weapon === run.weapon)
+    if (aspect) aspect.apply(s)
     for (const boon of run.boons) {
       const def = BOONS.find(one => one.id === boon.id)
-      if (def) def.apply(s, boonValue(def, boon.rarity))
+      if (def) def.apply(s, boonValue(def, boon.rarity, boon.level))
     }
+    for (const id of run.items ?? []) ITEMS.find(one => one.id === id)?.apply(s, 1)
   }
   s.crit = Math.min(s.crit, 0.6)
   s.dodge = Math.min(s.dodge, 0.5)
+  s.armor = Math.min(s.armor, 0.6)
+  s.attackSpeed = Math.max(0.5, s.attackSpeed)
+  s.maxHp = Math.max(10, s.maxHp)
+  s.extraShots = Math.min(s.extraShots, 6)
+  s.orbitals = Math.min(s.orbitals, 4)
+  s.summons = Math.min(s.summons, 4)
   return s
 }
 
@@ -385,7 +395,7 @@ export function genFloor(g: GameState, biome: number, seed: number, biomeName: s
         x: c.x, y: c.y, kind, name,
         isCleared: kind === 'start' || kind === 'treasure' || kind === 'shop',
         isSeen: i === 0, isVisited: i === 0,
-        loot: kind === 'treasure' ? ['altar'] : kind === 'shop' ? ['shopHeart', 'shopBoon'] : [],
+        loot: kind === 'treasure' ? ['altar'] : kind === 'shop' ? ['shopHeart', 'shopBoon', 'shopItem'] : [],
       }
     })
   }
@@ -416,6 +426,7 @@ export function startRun(state: GameState, seed: number, now: string): GameState
     version: 3, seed, weapon: g.lineage.weapon, biome: 0, depth: 0, biomeName: '', floor: [], cur: 0, entry: null,
     hp: s.maxHp, bonusHp: 0, boons: [], eclats: 0, defiance: g.lineage.mirror.defi ?? 0, offer: null,
     offerQueue: (g.lineage.mirror.eclaireur ?? 0) + g.feed.runeOffers, kills: 0, slain: [], log: [],
+    items: [], itemQueue: 0, aspect: g.lineage.aspectOn?.[g.lineage.weapon],
   }
   g.feed.runeOffers = 0
   g.run = run
@@ -425,8 +436,9 @@ export function startRun(state: GameState, seed: number, now: string): GameState
   g.champion.runs += 1
   newFloor(g, run)
   const w = WEAPONS.find(one => one.id === run.weapon)
-  say(run, `${championTitle(g.champion)} descend dans le donjon de ${g.ctx.repoName}, ${w?.title.toLowerCase()} « ${w?.name} » en main.`)
-  if (run.offerQueue > 0) rollOffer(run, seed)
+  const aspect = ASPECTS.find(one => one.id === run.aspect)
+  say(run, `${championTitle(g.champion)} descend dans le donjon de ${g.ctx.repoName}, ${w?.title.toLowerCase()} « ${w?.name} » en main${aspect ? ` (${aspect.name})` : ''}.`)
+  if (run.offerQueue > 0) rollOffer(run, seed, combatStats(g))
   return g
 }
 
@@ -466,9 +478,11 @@ export function prepareRoom(state: GameState, seed: number): { g: GameState; spe
     run.hp = Math.min(s.maxHp, run.hp + heal)
     say(run, `📜 Parchemins lus par Claude : +${heal} PV.`)
   }
-  const items: { kind: string; price?: number }[] = room.loot.map(kind => ({
-    kind, price: kind === 'shopHeart' ? 8 + run.biome * 4 : kind === 'shopBoon' ? 20 + run.biome * 8 : undefined,
-  }))
+  const off = 1 - Math.min(0.5, s.shopDiscount)
+  const items: { kind: string; price?: number; tag?: string }[] = room.loot.map(kind => kind === 'shopItem'
+    // The shop's item stand shows as a boon stand; the tag says what it sells.
+    ? { kind: 'shopBoon', tag: 'shopItem', price: Math.round((30 + run.biome * 10) * off) }
+    : { kind, price: kind === 'shopHeart' ? Math.round((8 + run.biome * 4) * off) : kind === 'shopBoon' ? Math.round((20 + run.biome * 8) * off) : undefined })
   if (room.kind === 'boss' && room.isCleared) items.push({ kind: 'stairs' })
   const spec: RoomSpec = {
     seed, biome: run.biome, chamber: 0, depth: threat(run), isBoss, boss, errorSpawns, chests, portals,
@@ -477,8 +491,8 @@ export function prepareRoom(state: GameState, seed: number): { g: GameState; spe
     isFight, entry: run.entry, wallet: run.eclats, items,
     doors: exits(run.floor, run.cur).map(exit => ({ ...exit, kind: run.floor[exit.to]!.isSeen ? run.floor[exit.to]!.kind : 'normal' })),
   }
-  if (room.kind === 'shop') say(run, `$ La Boutique : cœur ${items.find(i => i.kind === 'shopHeart')?.price ?? '—'} ◆ · bienfait ${items.find(i => i.kind === 'shopBoon')?.price ?? '—'} ◆ (tu as ${run.eclats} ◆).`)
-  else if (room.kind === 'treasure' && room.loot.includes('altar')) say(run, '★ Salle du Trésor : un autel attend, un dieu du dépôt y répond.')
+  if (room.kind === 'shop') say(run, `$ La Boutique : cœur ${items.find(i => i.kind === 'shopHeart')?.price ?? '—'} ◆ · bienfait ${items.find(i => i.kind === 'shopBoon' && !i.tag)?.price ?? '—'} ◆ · objet ${items.find(i => i.tag === 'shopItem')?.price ?? '—'} ◆ (tu as ${run.eclats} ◆).`)
+  else if (room.kind === 'treasure' && room.loot.includes('altar')) say(run, '★ Salle du Trésor : un piédestal, deux objets. Un seul part avec toi.')
   else say(run, `— ${room.name}`)
   return { g, spec }
 }
@@ -489,20 +503,130 @@ export function threat(run: RunProgress): number {
   return run.biome * 5 + Math.min(4, Math.floor(cleared / 2))
 }
 
-function rollOffer(run: RunProgress, seed: number) {
+const defOf = (id: string): BoonDef | undefined => BOONS.find(one => one.id === id)
+const isItemOffer = (offer: BoonInst[] | null) => !!offer && offer.length > 0 && offer.every(o => defOf(o.id)?.isItem)
+
+/** Held gods: the ones a duo needs. */
+function heldGods(run: RunProgress): Set<string> {
+  return new Set(run.boons.map(b => defOf(b.id)).filter(def => def && !def.duo && !def.isItem).map(def => def!.god))
+}
+
+/** The duos whose two gods are held and that are not taken yet. */
+export function eligibleDuos(run: RunProgress): BoonDef[] {
+  const gods = heldGods(run)
+  return DUO_BOONS.filter(def => def.duo && gods.has(def.duo[0]) && gods.has(def.duo[1]) && !run.boons.some(b => b.id === def.id))
+}
+
+/** Held boons that can grow a level (not the one-shot ones). */
+function levelable(run: RunProgress): BoonInst[] {
+  return run.boons.filter(b => { const def = defOf(b.id); return !!def && !def.onPick && (b.level ?? 1) < 6 })
+}
+
+/**
+ * Three gifts: mostly new boons from three gods, sometimes a level-up of one
+ * held, sometimes a duo once two gods are held; now and then a whole offer of
+ * level-ups (a Pom of Power).
+ */
+export function rollOffer(run: RunProgress, seed: number, s?: CombatStats) {
   const roll = rng(seed + run.depth * 977 + run.boons.length * 131 + run.offerQueue * 17)
-  const held = new Set(run.boons.map(b => b.id))
-  const pool = BOONS.filter(def => !held.has(def.id) || def.slot === 'passive')
+  const luck = s?.luck ?? 0
+  const rarity = () => {
+    const r = roll() - luck
+    return r < 0.03 ? 3 : r < 0.13 ? 2 : r < 0.4 ? 1 : 0
+  }
+  const grow = levelable(run)
   const offer: BoonInst[] = []
-  const gods = new Set<string>()
+  const pom = grow.length >= 3 && roll() < 0.18
+  if (pom) {
+    for (const held of [...grow].sort(() => roll() - 0.5).slice(0, 3)) offer.push({ id: held.id, rarity: held.rarity, level: (held.level ?? 1) + 1 })
+    run.offer = offer
+    return
+  }
+  const duos = eligibleDuos(run)
+  if (duos.length > 0 && roll() < 0.4) offer.push({ id: duos[Math.floor(roll() * duos.length)]!.id, rarity: DUO_RARITY })
+  const held = new Set(run.boons.map(b => b.id))
+  const pool = GOD_BOONS.filter(def => !held.has(def.id))
+  const gods = new Set<string>(offer.map(o => defOf(o.id)?.god ?? ''))
   for (let tries = 0; offer.length < 3 && tries < 200; tries++) {
+    if (grow.length > 0 && roll() < 0.2) {
+      const one = grow[Math.floor(roll() * grow.length)]!
+      if (offer.some(o => o.id === one.id)) continue
+      offer.push({ id: one.id, rarity: Math.max(one.rarity, Math.min(3, rarity())), level: (one.level ?? 1) + 1 })
+      continue
+    }
     const def = pool[Math.floor(roll() * pool.length)]
     if (!def || offer.some(o => o.id === def.id) || gods.has(def.god)) continue
     gods.add(def.god)
-    const r = roll()
-    offer.push({ id: def.id, rarity: r < 0.12 ? 2 : r < 0.4 ? 1 : 0 })
+    offer.push({ id: def.id, rarity: rarity() })
   }
   run.offer = offer
+}
+
+/** A treasure pedestal or a shop item: two items, take one. */
+function rollItems(run: RunProgress, seed: number) {
+  const roll = rng(seed + run.depth * 613 + (run.items?.length ?? 0) * 97)
+  const offer: BoonInst[] = []
+  for (let tries = 0; offer.length < 2 && tries < 100; tries++) {
+    const def = ITEMS[Math.floor(roll() * ITEMS.length)]
+    if (def && !offer.some(o => o.id === def.id)) offer.push({ id: def.id, rarity: ITEM_RARITY })
+  }
+  run.offer = offer
+}
+
+/** Whatever waits next: boons first, then items. */
+function nextOffer(run: RunProgress, seed: number, s?: CombatStats) {
+  if (run.offer) return
+  if (run.offerQueue > 0) rollOffer(run, seed, s)
+  else if ((run.itemQueue ?? 0) > 0) rollItems(run, seed)
+}
+
+// ---------- what the pane shows (pure text, French) ----------
+
+/** One offer line: `[rarity] slot · god — name : effect (note)`. */
+export function offerLabel(run: RunProgress, inst: BoonInst): string {
+  const def = defOf(inst.id)
+  if (!def) return inst.id
+  const v = boonValue(def, inst.rarity, inst.level)
+  if (def.isItem) {
+    const n = (run.items ?? []).filter(id => id === def.id).length
+    return `[Objet] ${def.name} : ${def.desc(v)}${n > 0 ? ` (tu l'as ×${n}, ça se cumule)` : ''}`
+  }
+  if (def.duo) return `[Duo] ${def.god} — ${def.name} : ${def.desc(v)}`
+  const held = run.boons.find(b => b.id === def.id)
+  const r = (RARITY[inst.rarity] ?? RARITY[0]!).label
+  if (held) return `[${r} · Niv. ${inst.level ?? (held.level ?? 1) + 1}] ${SLOT_LABEL[def.slot]} · ${def.god} — ${def.name} : ${def.desc(v)} (améliore le tien)`
+  const replaced = def.slot !== 'passive' ? run.boons.map(b => defOf(b.id)).find(one => one && !one.duo && one.slot === def.slot) : undefined
+  return `[${r}] ${SLOT_LABEL[def.slot]} · ${def.god} (${GOD_STATUS[def.god] ?? ''}) — ${def.name} : ${def.desc(v)}${replaced ? ` (remplace « ${replaced.name} »)` : ''}`
+}
+
+/** The header over an offer. */
+export function offerTitle(run: RunProgress): string {
+  const offer = run.offer ?? []
+  if (isItemOffer(offer)) return `★ Deux objets t'attendent : prends-en un (1 ou 2).`
+  if (offer.length > 0 && offer.every(o => run.boons.some(b => b.id === o.id))) return '✦ Grenade de puissance : un de tes bienfaits gagne un niveau (1, 2 ou 3).'
+  if (offer.some(o => defOf(o.id)?.duo)) return "✦ Deux dieux s'accordent : un bienfait Duo est offert (1, 2 ou 3)."
+  return "✦ Un dieu du dépôt t'offre un bienfait (1, 2 ou 3) :"
+}
+
+/** The build in one line: boons with levels, then items with counts. */
+export function buildSummary(run: RunProgress): string {
+  const boons = run.boons.map(b => {
+    const def = defOf(b.id)
+    return def ? `${def.name}${(b.level ?? 1) > 1 ? ` ${b.level}` : ''}` : b.id
+  })
+  const counts = new Map<string, number>()
+  for (const id of run.items ?? []) counts.set(id, (counts.get(id) ?? 0) + 1)
+  const items = [...counts].map(([id, n]) => `${defOf(id)?.name ?? id}${n > 1 ? ` ×${n}` : ''}`)
+  return [boons.length ? `Bienfaits : ${boons.join(' · ')}` : '', items.length ? `Objets : ${items.join(' · ')}` : ''].filter(Boolean).join('   ')
+}
+
+/** Arsenal lines for one weapon's aspects: what each does, owned, worn, price. */
+export function aspectsFor(lineage: Lineage, weapon: WeaponId): { id: string; label: string; isOwned: boolean; isOn: boolean; cost: number }[] {
+  return ASPECTS.filter(a => a.weapon === weapon).map(a => {
+    const isOwned = (lineage.aspects ?? []).includes(a.id)
+    const isOn = lineage.aspectOn?.[weapon] === a.id
+    return { id: a.id, isOwned, isOn, cost: a.cost, label: `${isOn ? '■' : isOwned ? '□' : '🔒'} ${a.name} — ${a.desc}${isOwned ? '' : `  ◆${a.cost}`}` }
+  })
 }
 
 export function onKill(state: GameState, kill: { name: string; kind: string; level: number; sig?: string }, now: string): GameState {
@@ -511,7 +635,7 @@ export function onKill(state: GameState, kill: { name: string; kind: string; lev
   if (!run) return g
   run.kills += 1
   const shards = Math.round((kill.kind === 'biome' || kill.kind === 'minion' ? 1 : kill.kind === 'error' ? 4 : 18) * fortune(g))
-  run.eclats += shards
+  run.eclats += shards + ((run.items ?? []).length > 0 ? combatStats(g).killShards : 0)
   if (kill.kind !== 'biome' && kill.kind !== 'minion') run.slain.push(kill.name)
   if (kill.kind === 'error' && kill.sig) {
     const i = g.feed.errorPool.findIndex(one => one.sig === kill.sig)
@@ -546,15 +670,17 @@ export function onChest(state: GameState, n: number): GameState {
   return g
 }
 
-/** A portal or the treasure altar: a god answers. */
+/** A portal: a god answers. The treasure altar: an item pedestal, two items. */
 export function onPortal(state: GameState): GameState {
   const g = clone(state)
   const run = g.run
   if (!run) return g
   const room = run.floor[run.cur]
-  if (room?.kind === 'treasure') room.loot = room.loot.filter(one => one !== 'altar')
-  run.offerQueue += 1
-  if (!run.offer) rollOffer(run, run.seed + run.kills + run.depth)
+  if (room?.kind === 'treasure' && room.loot.includes('altar')) {
+    room.loot = room.loot.filter(one => one !== 'altar')
+    run.itemQueue = (run.itemQueue ?? 0) + 1
+  } else run.offerQueue += 1
+  nextOffer(run, run.seed + run.kills + run.depth, combatStats(g))
   return g
 }
 
@@ -569,13 +695,20 @@ export function onBuy(state: GameState, item: string, price: number): GameState 
     const s = combatStats(g)
     run.hp = Math.min(s.maxHp, run.hp + Math.round(s.maxHp * 0.4))
     say(run, `♥ Acheté : un cœur (−${price} ◆).`)
+  } else if (item === 'shopItem') {
+    run.itemQueue = (run.itemQueue ?? 0) + 1
+    nextOffer(run, run.seed + run.depth + price, combatStats(g))
+    say(run, `★ Acheté : un objet (−${price} ◆).`)
   } else {
     run.offerQueue += 1
-    if (!run.offer) rollOffer(run, run.seed + run.depth + price)
+    nextOffer(run, run.seed + run.depth + price, combatStats(g))
     say(run, `✦ Acheté : un bienfait (−${price} ◆).`)
   }
   return g
 }
+
+/** Fights on a floor after which a god offers a boon. */
+export const BOON_FIGHTS = [2, 5]
 
 /** The room is clear: doors unlock; past the guardian, the loot is safe. */
 export function onCleared(state: GameState, hp: number, now: string): GameState {
@@ -585,15 +718,25 @@ export function onCleared(state: GameState, hp: number, now: string): GameState 
   if (!run || !room) return g
   room.isCleared = true
   const s = combatStats(g)
-  run.hp = Math.min(s.maxHp, hp + 2)
+  run.hp = Math.min(s.maxHp, hp + 2 + s.roomHeal)
   if (room.kind === 'boss') {
     g.lineage.eclats += run.eclats
     say(run, `🏆 Gardien vaincu ! ${run.eclats} éclats mis en sûreté dans la Lignée.`)
     run.eclats = 0
     if (run.biome + 1 >= BIOMES) return victory(g, run, now)
     say(run, 'Une trappe s\'ouvre vers l\'étage suivant.')
+    // Isaac's boss item: the guardian leaves something behind.
+    run.itemQueue = (run.itemQueue ?? 0) + 1
+    say(run, '★ Le gardien laisse un objet derrière lui.')
+  } else if (room.kind === 'normal' || room.kind === 'session') {
+    // Hades' room rewards: a god watches every few fights on a floor.
+    const fights = run.floor.filter(one => one.isCleared && (one.kind === 'normal' || one.kind === 'session')).length
+    if (BOON_FIGHTS.includes(fights)) {
+      run.offerQueue += 1
+      say(run, '✦ Un dieu du dépôt a vu ton combat : un bienfait t\'attend.')
+    }
   }
-  if (run.offerQueue > 0 && !run.offer) rollOffer(run, run.seed + run.depth)
+  nextOffer(run, run.seed + run.depth, s)
   return g
 }
 
@@ -715,25 +858,60 @@ export function menu(state: GameState, a: MenuAction, now: string, seed: number)
       g.lineage.weapon = def.id as WeaponId
       return g
     }
+    case 'aspect': {
+      const def = ASPECTS.find(one => one.id === a.id)
+      if (!def || !g.lineage.weapons.includes(def.weapon)) return g
+      const owned = g.lineage.aspects ?? []
+      if (!owned.includes(def.id)) {
+        if (g.lineage.eclats < def.cost) return g
+        g.lineage.eclats -= def.cost
+        g.lineage.aspects = [...owned, def.id]
+        notice(g, `Arsenal : ${def.name} débloqué.`)
+      }
+      const on = { ...(g.lineage.aspectOn ?? {}) }
+      if (on[def.weapon] === def.id) delete on[def.weapon]
+      else on[def.weapon] = def.id
+      g.lineage.aspectOn = on
+      g.lineage.weapon = def.weapon
+      return g
+    }
     case 'pick': {
       const run = g.run
       if (!run?.offer) return g
       const chosen = run.offer[a.i]
-      const def = chosen ? BOONS.find(one => one.id === chosen.id) : undefined
+      const def = chosen ? defOf(chosen.id) : undefined
       if (!chosen || !def) return g
+      const wasItems = isItemOffer(run.offer)
+      const duosBefore = eligibleDuos(run).length
       const before = combatStats(g).maxHp
-      if (def.slot !== 'passive') {
-        const replaced = run.boons.find(b => BOONS.find(one => one.id === b.id)?.slot === def.slot)
-        run.boons = run.boons.filter(b => b !== replaced)
-        if (replaced) say(run, `(${BOONS.find(one => one.id === replaced.id)?.name} est remplacé.)`)
+      const held = run.boons.find(b => b.id === def.id)
+      if (def.isItem) {
+        run.items = [...(run.items ?? []), def.id]
+        def.onPick?.(run, 1)
+        say(run, `★ Objet pris : « ${def.name} » (${def.desc(1)}).`)
+      } else if (held) {
+        held.level = Math.max((held.level ?? 1) + 1, chosen.level ?? 0)
+        held.rarity = Math.max(held.rarity, chosen.rarity)
+        say(run, `✦ « ${def.name} » passe niveau ${held.level} : ${def.desc(boonValue(def, held.rarity, held.level))}.`)
+      } else {
+        if (def.slot !== 'passive') {
+          const replaced = run.boons.find(b => { const one = defOf(b.id); return !!one && !one.duo && one.slot === def.slot })
+          run.boons = run.boons.filter(b => b !== replaced)
+          if (replaced) say(run, `(${defOf(replaced.id)?.name} est remplacé.)`)
+        }
+        run.boons.push({ id: chosen.id, rarity: chosen.rarity })
+        def.onPick?.(run, boonValue(def, chosen.rarity))
+        say(run, `✦ ${def.god} t'accorde « ${def.name} » : ${def.desc(boonValue(def, chosen.rarity))}.`)
+        if (eligibleDuos(run).length > duosBefore) say(run, '✦ Deux de tes dieux pourraient s\'accorder : un Duo peut t\'être offert.')
       }
-      run.boons.push(chosen)
-      const gained = combatStats(g).maxHp - before
+      const s = combatStats(g)
+      const gained = s.maxHp - before
       if (gained > 0) run.hp += gained
-      say(run, `✦ ${def.god} t'accorde « ${def.name} » : ${def.desc(boonValue(def, chosen.rarity))}.`)
+      run.hp = Math.min(run.hp, s.maxHp)
       run.offer = null
-      run.offerQueue = Math.max(0, run.offerQueue - 1)
-      if (run.offerQueue > 0) rollOffer(run, seed)
+      if (wasItems) run.itemQueue = Math.max(0, (run.itemQueue ?? 0) - 1)
+      else run.offerQueue = Math.max(0, run.offerQueue - 1)
+      nextOffer(run, seed, s)
       return g
     }
   }

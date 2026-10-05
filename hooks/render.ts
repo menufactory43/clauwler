@@ -1,8 +1,11 @@
 import type { RGB, Sprite } from './art'
 import type { Fine } from './art'
-import { BIOME_TONES, CHEST, FAMILIAR, FINE, GOBLIN, HERO, HERO_FINE, ICONS, LARVA, P, RAT, SKELETON, SLUG, fold, glyph, lit } from './art'
-import type { Enemy, Live } from './sim'
-import { ENEMY, FH, FW, ROOM } from './sim'
+import {
+  BIOME_TONES, BUG, BURROWER, CHEST, FAMILIAR, FINE, FORKER, GOBLIN, GUARDIAN_FINE, HERO, HERO_FINE, ICONS, LARVA, LEAK, LINTER,
+  MICRO, MINER, MONOLITH, P, RAT, REVIEWER, SENTINEL, SKELETON, SLUG, SNIPER, TURRET, fold, glyph, lit,
+} from './art'
+import type { Enemy, Live, Strike } from './sim'
+import { AFFIX_LABEL, ENEMY, FH, FW, ROOM, rayToWall } from './sim'
 
 export type View = {
   biomeLabel: string
@@ -123,7 +126,8 @@ function shadow(b: Buf, cx: number, cy: number, rx: number, ry: number, a = 0.4)
   }
 }
 
-type BlitOpts = { flip?: boolean; tint?: RGB; swap?: Record<string, string>; alpha?: number }
+/** `sx`/`sy`: the fine sprite stretched (squash and stretch, feet held); `mul`: its colours multiplied (elites, Némésis). */
+type BlitOpts = { flip?: boolean; tint?: RGB; swap?: Record<string, string>; alpha?: number; sx?: number; sy?: number; mul?: RGB }
 
 function blit(b: Buf, s: Sprite, cx: number, by: number, opts: BlitOpts = {}) {
   const x0 = Math.round(cx - s.w / 2)
@@ -142,15 +146,27 @@ function blit(b: Buf, s: Sprite, cx: number, by: number, opts: BlitOpts = {}) {
 
 /** A fine sprite, its feet at `by`, centred on `cx` (world coordinates). */
 function blitFine(b: Buf, s: Fine, cx: number, by: number, opts: BlitOpts = {}) {
-  const x0 = Math.round((cx + b.ox) * S - s.w / 2)
-  const y0 = Math.round((by + b.oy) * S - s.h)
-  for (let y = 0; y < s.h; y++) for (let x = 0; x < s.w; x++) {
-    const k = y * s.w + (opts.flip ? s.w - 1 - x : x)
-    let ch = s.ch[k]!
-    if (ch === '.') continue
-    if (opts.swap?.[ch]) ch = opts.swap[ch]!
-    const base = opts.tint && ch !== 'k' ? opts.tint : P[ch]
-    if (base) dot(b, x0 + x, y0 + y, lit(base, s.light[k]!), opts.alpha ?? 1)
+  const sx = opts.sx ?? 1
+  const sy = opts.sy ?? 1
+  const W = Math.max(1, Math.round(s.w * sx))
+  const H = Math.max(1, Math.round(s.h * sy))
+  const x0 = Math.round((cx + b.ox) * S - W / 2)
+  const y0 = Math.round((by + b.oy) * S - H)
+  const mul = opts.mul
+  for (let y = 0; y < H; y++) {
+    const fy = Math.min(s.h - 1, Math.floor(y / sy))
+    for (let x = 0; x < W; x++) {
+      const fx = Math.min(s.w - 1, Math.floor(x / sx))
+      const k = fy * s.w + (opts.flip ? s.w - 1 - fx : fx)
+      let ch = s.ch[k]!
+      if (ch === '.') continue
+      if (opts.swap?.[ch]) ch = opts.swap[ch]!
+      const base = opts.tint && ch !== 'k' ? opts.tint : P[ch]
+      if (!base) continue
+      let c = lit(base, s.light[k]!)
+      if (mul) c = [Math.min(245, c[0] * mul[0]), Math.min(245, c[1] * mul[1]), Math.min(245, c[2] * mul[2])]
+      dot(b, x0 + x, y0 + y, c, opts.alpha ?? 1)
+    }
   }
 }
 
@@ -501,6 +517,7 @@ function lightsOf(live: Live): Light[] {
     if (e.type === 'boss') lights.push({ x: e.x, y: e.y - e.r, r: 34, c: e.kind === 'nemesis' ? [1, 0.4, 1] : [1, 0.45, 0.4], i: 0.55 })
     else if (e.kind === 'error') lights.push({ x: e.x, y: e.y - 4, r: 14, c: [1.1, 0.6, 0.2], i: 0.6 })
   }
+  for (const s of live.strikes ?? []) if (s.zone > 0) lights.push({ x: s.x, y: s.y, r: s.r + 8, c: [1.2, 0.6, 0.25], i: 0.6 })
   for (const fx of live.fx) {
     if (fx.kind === 'ring' && fx.r) lights.push({ x: fx.x, y: fx.y, r: fx.r + 10, c: [fx.color[0] / 200, fx.color[1] / 200, fx.color[2] / 200], i: fx.ttl / fx.max })
   }
@@ -588,17 +605,50 @@ function iconColor(reward: string): RGB {
 
 // ---------- bodies ----------
 
-const ELITE_SWAP: Record<string, string> = { G: 'a', s: 'a', w: 'a', y: 'a', b: 'r', c: 'a' }
+const COARSE: Record<Exclude<Enemy['type'], 'boss'>, Sprite> = {
+  rat: RAT, goblin: GOBLIN, slug: SLUG, skeleton: SKELETON, larva: LARVA, bug: BUG, linter: LINTER, forker: FORKER, turret: TURRET,
+  miner: MINER, burrower: BURROWER, monolith: MONOLITH, micro: MICRO, sentinel: SENTINEL, reviewer: REVIEWER, leak: LEAK, sniper: SNIPER,
+}
 
 function enemySprite(type: Enemy['type']): Sprite {
-  return type === 'rat' ? RAT : type === 'goblin' ? GOBLIN : type === 'slug' ? SLUG : type === 'skeleton' ? SKELETON : LARVA
+  return type === 'boss' ? LARVA : COARSE[type]
 }
 
 function enemyFine(type: Enemy['type']): Fine {
-  return type === 'rat' ? FINE.rat : type === 'goblin' ? FINE.goblin : type === 'slug' ? FINE.slug : type === 'skeleton' ? FINE.skeleton : FINE.larva
+  return (FINE as unknown as Record<string, Fine | undefined>)[type] ?? FINE.larva
+}
+
+/** Session errors glow orange; a Némésis turns violet. */
+const ELITE_MUL: RGB = [1.35, 0.82, 0.42]
+const NEMESIS_MUL: RGB = [1.1, 0.62, 1.35]
+
+const norm2 = (x: number, y: number): [number, number] => {
+  const d = Math.hypot(x, y)
+  return d < 1e-6 ? [0, 0] : [x / d, y / d]
+}
+
+/** How far into its windup a foe is, 0 to 1. */
+function windupOf(e: Enemy): number {
+  if (e.state !== 'windup') return 0
+  return Math.max(0, Math.min(1, 1 - e.t / Math.max(0.01, e.tMax ?? ENEMY[e.type].windup)))
+}
+
+/** A flat oval on the floor. */
+function oval(b: Buf, cx: number, cy: number, rx: number, ry: number, c: RGB, a = 1) {
+  const X = (cx + b.ox) * S
+  const Y = (cy + b.oy) * S
+  const RX = rx * S
+  const RY = ry * S
+  for (let j = Math.floor(-RY); j <= Math.ceil(RY); j++) for (let i = Math.floor(-RX); i <= Math.ceil(RX); i++) {
+    if ((i / RX) ** 2 + (j / RY) ** 2 <= 1) dot(b, Math.round(X + i), Math.round(Y + j), c, a)
+  }
 }
 
 function drawEnemy(b: Buf, live: Live, e: Enemy) {
+  if (e.type === 'burrower' && e.hidden) {
+    drawMound(b, live, e)
+    return
+  }
   if (e.state === 'spawn') {
     const k = 1 - Math.max(0, e.t) / 0.7
     disc(b, e.x, e.y, Math.max(1, Math.round(6 * k)), P.k!, 0.7)
@@ -610,13 +660,44 @@ function drawEnemy(b: Buf, live: Live, e: Enemy) {
     drawBoss(b, live, e)
     return
   }
-  const windup = e.state === 'windup'
-  const tint = e.flash > 0 ? P.w : windup && Math.floor(live.t * 16) % 2 === 0 ? P.y : undefined
+  // Anticipation: it crouches and leans away from its target, trembling more as the blow nears.
+  const prog = windupOf(e)
+  const [ax, ay] = norm2(e.aimX - e.x, e.aimY - e.y)
+  let ox = 0
+  let oy = 0
+  let sx = 1
+  let sy = 1
+  if (e.state === 'windup') {
+    ox = -ax * prog * 1.2 + (Math.floor(live.t * 30) % 2 ? 0.5 : -0.5) * prog
+    oy = -ay * prog * 0.6
+    sx = 1 + 0.14 * prog
+    sy = 1 - 0.12 * prog
+    if (e.type === 'leak') { sx += 0.3 * prog; sy += 0.35 * prog }
+  } else if (e.state === 'act') {
+    sx = 0.86
+    sy = 1.14
+  }
+  const q = e.squash ?? 0
+  sx *= 1 + 0.3 * q
+  sy *= 1 - 0.24 * q
+  const blink = e.state === 'windup' && prog > 0.35 && Math.floor(live.t * 14) % 2 === 0
+  const tint = e.flash > 0 ? P.w : blink ? (e.type === 'leak' ? P.q : P.y) : undefined
   const bob = S > 1 && e.state === 'chase' ? Math.round(Math.abs(Math.sin(live.t * 10 + e.id)) * S) / S : 0
-  sprite(b, enemySprite(e.type), enemyFine(e.type), e.x, e.y + 0.5 - bob, { flip: live.player.x < e.x, tint, swap: e.kind === 'error' ? ELITE_SWAP : undefined })
+  const isBehind = e.type === 'sentinel' && Math.sin(e.faceA ?? 0) < -0.2
+  if (isBehind) drawShield(b, e)
+  sprite(b, enemySprite(e.type), enemyFine(e.type), e.x + ox, e.y + 0.5 - bob + oy, { flip: live.player.x < e.x, tint, sx, sy, mul: e.kind === 'error' ? ELITE_MUL : undefined })
+  if (e.type === 'sentinel' && !isBehind) drawShield(b, e)
+  if ((e.buff ?? 0) > 0) {
+    // LGTM haste: green motes rising.
+    for (let i = 0; i < 3; i++) {
+      const u = (live.t * 1.5 + i / 3) % 1
+      fput(b, e.x - 3 + i * 3, e.y - 2 - u * 8, P.G!, 1 - u)
+    }
+  }
+  const h = enemySprite(e.type).h
   if (e.hp < e.maxHp || e.kind === 'error') {
-    const w = e.kind === 'error' ? 14 : 8
-    const y = e.y - enemySprite(e.type).h - 3
+    const w = e.kind === 'error' ? 14 : Math.max(8, e.r * 2)
+    const y = e.y - h - 3
     const th = S > 1 ? 1.5 : 1
     rect(b, e.x - w / 2 - 0.5, y - 0.5, w + 1, th + 0.5, P.k!)
     rect(b, e.x - w / 2, y, Math.max(0, (w * e.hp) / e.maxHp), th - 0.5 || 1, e.kind === 'error' ? P.a! : P.r!)
@@ -624,41 +705,69 @@ function drawEnemy(b: Buf, live: Live, e: Enemy) {
   if (e.kind === 'error' && hasWorldText) {
     const old = scale
     scale = worldScale()
-    text(b, e.sig ?? '', e.x - textWidth(e.sig ?? '') / 2, e.y - enemySprite(e.type).h - 4 - 5 * scale, P.a!)
+    const tag = e.affix ? `${e.sig ?? ''} ${AFFIX_LABEL[e.affix]}` : e.sig ?? ''
+    text(b, tag, e.x - textWidth(tag) / 2, e.y - h - 4 - 5 * scale, P.a!)
     scale = old
   }
 }
 
-const BOSS_COLORS: [RGB, RGB][] = [[P.r!, P.u!], [P.r!, P.a!], [P.G!, P.c!]]
-
-function drawBoss(b: Buf, live: Live, e: Enemy) {
-  const [left, right] = e.kind === 'nemesis' ? [[200, 60, 160] as RGB, [120, 40, 140] as RGB] : BOSS_COLORS[live.biome % 3]!
-  const r = e.r
-  const cy = e.y - r
-  const flash = e.flash > 0
-  const windup = e.state === 'windup' && Math.floor(live.t * 12) % 2 === 0
-  if (S > 1) {
-    ball(b, e.x, cy, r, flash ? P.w! : left)
-    // Its second colour in stripes across the belly.
-    if (!flash) for (let y = -r; y <= r; y += 1 / S) for (let x = -r; x <= r; x += 1 / S) if (x * x + y * y < (r - 1.2) ** 2 && Math.floor((y + r) * S / 3 + x * 0.3) % 3 === 0 && y > -r * 0.2) fput(b, e.x + x, cy + y, right, 0.45)
-  } else {
-    for (let y = -r; y <= r; y++) {
-      for (let x = -r; x <= r; x++) {
-        if (x * x + y * y > r * r) continue
-        const c = flash ? P.w! : x < 0 ? left : right
-        put(b, e.x + x, cy + y, c)
-      }
-    }
+/** The Sentinelle's tower shield, held where it faces. */
+function drawShield(b: Buf, e: Enemy) {
+  const a = e.faceA ?? 0
+  const cx = e.x + Math.cos(a) * 5
+  const cy = e.y - 4 + Math.sin(a) * 3.5
+  const px = -Math.sin(a)
+  const py = Math.cos(a)
+  const len = 4.5
+  for (let d = -1; d <= 1; d += 0.5) {
+    const c = d < -0.4 ? P.S! : d > 0.4 ? P.W! : P.s!
+    line(b, cx - px * len + Math.cos(a) * d * 0.6, cy - py * len - 1 + Math.sin(a) * d * 0.6, cx + px * len + Math.cos(a) * d * 0.6, cy + py * len - 1 + Math.sin(a) * d * 0.6, c)
   }
-  circle(b, e.x, cy, r, windup ? P.y! : P.k!)
-  disc(b, e.x - 4, cy - 2, 2, P.w!)
-  disc(b, e.x + 4, cy - 2, 2, P.w!)
-  put(b, e.x - 4, cy - 2, P.k!)
-  put(b, e.x + 4, cy - 2, P.k!)
-  for (let i = -4; i <= 4; i += 2) put(b, e.x + i, cy + 4, P.w!)
-  line(b, e.x - 5, cy + 3, e.x + 5, cy + 3, P.k!)
-  // Crown.
-  for (const dx of [-5, 0, 5]) line(b, e.x + dx, cy - r - 3, e.x + dx, cy - r + 1, P.y!)
+  put(b, cx, cy - 1, P.r!)
+  line(b, cx - px * len, cy - py * len - 1, cx + px * len, cy + py * len - 1, P.y!, 0.5)
+}
+
+/** The cache worm under the floor: a mound that moves, then shakes on its mark. */
+function drawMound(b: Buf, live: Live, e: Enemy) {
+  const isMarked = e.pattern === 1
+  const k = isMarked ? 1 - Math.max(0, e.t) / Math.max(0.01, e.tMax ?? 0.75) : 0
+  const jig = isMarked ? (Math.floor(live.t * 24) % 2 ? 0.5 : -0.5) * (0.5 + k) : 0
+  const rx = isMarked ? 3.5 + k * 1.5 : 3
+  oval(b, e.x + jig, e.y, rx + 0.5, 1.8, P.B!)
+  oval(b, e.x + jig, e.y - 0.5, rx, 1.3, P.b!)
+  for (let i = 0; i < 3; i++) put(b, e.x - 2 + i * 2 + jig, e.y - 1 - ((Math.floor(live.t * 8) + i) % 2), P.T!)
+}
+
+/** The guardians, drawn fine; at S 1, the same art at half size. */
+function drawBoss(b: Buf, live: Live, e: Enemy) {
+  const look = GUARDIAN_FINE[e.boss ?? 0] ?? GUARDIAN_FINE[0]!
+  const pose = look[(e.phase ?? 1) >= 2 ? 1 : 0]!
+  const prog = windupOf(e)
+  let ox = 0
+  let sx = 1
+  let sy = 1 + Math.sin(live.t * 3) * 0.025
+  if (e.state === 'windup') {
+    ox = (Math.floor(live.t * 30) % 2 ? 0.5 : -0.5) * (0.4 + prog)
+    sx = 1 + 0.06 * prog
+    sy *= 1 - 0.05 * prog
+  } else if (e.state === 'stun') {
+    // The phase change: a roar that shakes it.
+    ox = Math.floor(live.t * 40) % 2 ? 1 : -1
+    sx = 1.06
+    sy *= 1.06
+  } else if (e.state === 'act' && e.move === 'charge') {
+    sx = 1.08
+    sy *= 0.94
+  }
+  const q = e.squash ?? 0
+  sx *= 1 + 0.1 * q
+  sy *= 1 - 0.08 * q
+  const isInv = (e.inv ?? 0) > 0 && Math.floor(live.t * 12) % 2 === 0
+  const tint = e.flash > 0 || isInv ? P.w : undefined
+  let mul: RGB | undefined = e.kind === 'nemesis' ? NEMESIS_MUL : undefined
+  if (e.state === 'windup' && prog > 0.4 && Math.floor(live.t * 12) % 2 === 0) mul = mul ? [mul[0] * 1.3, mul[1] * 1.3, mul[2] * 1.3] : [1.35, 1.3, 1.2]
+  const half = S > 1 ? 1 : 0.5
+  blitFine(b, pose, e.x + ox, e.y + 1.5, { sx: sx * half, sy: sy * half, tint, mul })
 }
 
 function drawPlayer(b: Buf, live: Live) {
@@ -742,6 +851,8 @@ export function renderFrame(live: Live | null, view: View, frame: Uint8Array): U
       put(b, fx.x, fx.y - 1, P.w!, k * 0.7)
     } else if (fx.kind === 'ghost') {
       sprite(b, HERO[0]!, HERO_FINE[0], fx.x, fx.y + 1, { tint: fx.color, alpha: k * 0.5, flip: live.player.faceX < 0 })
+    } else if (fx.kind === 'stain' && fx.r) {
+      oval(b, fx.x, fx.y, fx.r, fx.r * 0.45, fx.color, 0.35 * Math.min(1, fx.ttl / 2))
     }
   }
 
@@ -754,7 +865,8 @@ export function renderFrame(live: Live | null, view: View, frame: Uint8Array): U
       rect(b, item.x - 6, item.y - 3, 12, 6, P.s!)
       rect(b, item.x - 6, item.y - 3, 12, 1, P.w!)
       rect(b, item.x - 5, item.y + 3, 10, 2, P.g!)
-      sprite(b, ICONS.boon!, FINE.icons.boon, item.x, item.y - 6 + bob)
+      sprite(b, ICONS.item!, FINE.icons.item, item.x, item.y - 6 + bob)
+      circle(b, item.x, item.y - 8 + bob, 4 + Math.sin(live.t * 4) * 0.5, P.u!, 0.35)
     } else if (item.kind === 'shopHeart' || item.kind === 'shopBoon') {
       if (S > 1) {
         rect(b, item.x - 6, item.y + 3, 1, 3, P.B!)
@@ -765,6 +877,7 @@ export function renderFrame(live: Live | null, view: View, frame: Uint8Array): U
         for (let k = -7 + 3.5; k < 7; k += 3.5) rect(b, item.x + k, item.y + 1, 0.5, 2, P.B!, 0.6)
       } else rect(b, item.x - 7, item.y + 1, 14, 3, P.b!)
       if (item.kind === 'shopHeart') sprite(b, ICONS.heart!, FINE.icons.heart, item.x, item.y + bob)
+      else if (item.tag === 'shopItem') sprite(b, ICONS.item!, FINE.icons.item, item.x, item.y + bob)
       else sprite(b, ICONS.boon!, FINE.icons.boon, item.x, item.y + bob)
       if (S > 1 && hasWorldText) {
         const old = scale
@@ -797,6 +910,11 @@ export function renderFrame(live: Live | null, view: View, frame: Uint8Array): U
   bodies.sort((a, z) => a.y - z.y)
   for (const body of bodies) body.draw()
 
+  if (S > 1) applyLight(b, live, lightsOf(live))
+
+  // Over the light, so they read at once: what is about to land, and what is flying.
+  for (const s of live.strikes ?? []) drawStrike(b, live, s)
+  for (const e of live.enemies) if (e.state === 'windup') drawWindup(b, live, e)
   for (const pr of live.projs) {
     const [nx, ny] = [pr.vx / (Math.hypot(pr.vx, pr.vy) || 1), pr.vy / (Math.hypot(pr.vx, pr.vy) || 1)]
     switch (pr.kind) {
@@ -804,12 +922,23 @@ export function renderFrame(live: Live | null, view: View, frame: Uint8Array): U
       case 'spear': line(b, pr.x - nx * 8, pr.y - ny * 8, pr.x, pr.y, P.s!); put(b, pr.x, pr.y, P.w!); break
       case 'bolt': disc(b, pr.x, pr.y, 1.5, P.c!); fput(b, pr.x, pr.y, P.w!); circle(b, pr.x, pr.y, 3, P.u!, 0.5); line(b, pr.x - nx * 5, pr.y - ny * 5, pr.x, pr.y, P.c!, 0.5); break
       case 'shield': disc(b, pr.x, pr.y, 3, P.s!); put(b, pr.x, pr.y, P.w!); break
-      case 'spit': ball(b, pr.x, pr.y, 2, P.G!); break
-      case 'orb': ball(b, pr.x, pr.y, 2, P.r!); fput(b, pr.x, pr.y, P.y!); break
+      // Foes' shots: a dark rim, a hot core, so they stand out from the floor and from each other.
+      case 'spit': disc(b, pr.x, pr.y, 2.5, P.k!, 0.6); ball(b, pr.x, pr.y, 2, P.G!); fput(b, pr.x - 0.5, pr.y - 0.5, P.y!); break
+      case 'orb': {
+        const [rim, core] = pr.tone === 1 ? [P.u!, P.c!] : [P.r!, P.y!]
+        disc(b, pr.x, pr.y, 2.5, P.k!, 0.6)
+        ball(b, pr.x, pr.y, 2, rim)
+        fput(b, pr.x, pr.y, core)
+        fput(b, pr.x - 0.5, pr.y - 0.5, P.w!)
+        break
+      }
+      case 'shot':
+        line(b, pr.x - nx * 6, pr.y - ny * 6, pr.x, pr.y, P.r!, 0.7)
+        line(b, pr.x - nx * 3, pr.y - ny * 3, pr.x, pr.y, P.w!)
+        disc(b, pr.x, pr.y, 1, P.q!)
+        break
     }
   }
-
-  if (S > 1) applyLight(b, live, lightsOf(live))
 
   // Over everything: swings, rings, sparks, numbers.
   for (const fx of live.fx) {
@@ -827,16 +956,36 @@ export function renderFrame(live: Live | null, view: View, frame: Uint8Array): U
       line(b, fx.x, fx.y, fx.x2, fx.y2, fx.color, k)
     } else if (fx.kind === 'spark') {
       if (S > 1) { fput(b, fx.x, fx.y, P.w!, k); fput(b, fx.x + 0.5, fx.y, fx.color, k); fput(b, fx.x, fx.y + 0.5, fx.color, k * 0.7) } else put(b, fx.x, fx.y, fx.color, k)
+    } else if (fx.kind === 'gib') {
+      const size = fx.r ?? 0.5
+      rect(b, fx.x, fx.y - (fx.z ?? 0), size, size, fx.color, Math.min(1, k * 2))
+    } else if (fx.kind === 'beam' && fx.x2 !== undefined && fx.y2 !== undefined) {
+      const w = fx.w ?? 2
+      fillBand(b, fx.x, fx.y, fx.x2, fx.y2, w * (0.6 + 0.4 * k), fx.color, 0.75 * k)
+      fillBand(b, fx.x, fx.y, fx.x2, fx.y2, w * 0.35 * k, P.w!, 0.9 * k)
     } else if (fx.kind === 'num' && fx.text && hasWorldText) {
       const old = scale
-      scale = worldScale()
-      text(b, fx.text, fx.x - textWidth(fx.text) / 2, fx.y, fx.color)
+      scale = worldScale() * (fx.big ? 2 : 1)
+      // Big numbers pop: larger for the first instants.
+      text(b, fx.text, fx.x - textWidth(fx.text) / 2, fx.y, k > 0.85 && fx.big ? P.w! : fx.color)
       scale = old
     }
   }
+  for (const fx of live.fx) if (fx.kind === 'flash') rect(b, -b.ox, -b.oy, FW, FH, fx.color, 0.45 * (fx.ttl / fx.max))
 
   b.ox = 0
   b.oy = -top
+  // Hurt: the frame's edges bleed red for a moment.
+  if (live.player.flash > 0) {
+    const a = Math.min(1, live.player.flash / 0.28) * 0.45
+    for (let i = 0; i < 6; i++) {
+      const k = a * (1 - i / 6)
+      rect(b, i, 0, 1, VH, P.r!, k)
+      rect(b, VW - 1 - i, 0, 1, VH, P.r!, k)
+      rect(b, 0, top + i, VW, 1, P.r!, k)
+      rect(b, 0, VH - 1 - i, VW, 1, P.r!, k)
+    }
+  }
   // Foes out of sight: a mark on the edge, where they are.
   if (VW < FW || VH < FH) {
     for (const e of live.enemies) {
@@ -851,6 +1000,195 @@ export function renderFrame(live: Live | null, view: View, frame: Uint8Array): U
   if (hud) drawHud(b, live, view)
   else if (live.isDead || view.isOffer || view.isPaused) rect(b, 0, 0, VW, VH, P.k!, 0.55)
   return frame
+}
+
+// ---------- telegraphs ----------
+
+/** A band between two points, `w` wide on each side, filled at one alpha. */
+function fillBand(b: Buf, x0: number, y0: number, x1: number, y1: number, w: number, c: RGB, a: number) {
+  if (w <= 0 || a <= 0) return
+  const dx = x1 - x0
+  const dy = y1 - y0
+  const L2 = dx * dx + dy * dy || 1
+  const X0 = Math.max(0, Math.floor((Math.min(x0, x1) - w + b.ox) * S))
+  const X1 = Math.min(RW - 1, Math.ceil((Math.max(x0, x1) + w + b.ox) * S))
+  const Y0 = Math.max(0, Math.floor((Math.min(y0, y1) - w + b.oy) * S))
+  const Y1 = Math.min(RH - 1, Math.ceil((Math.max(y0, y1) + w + b.oy) * S))
+  for (let py = Y0; py <= Y1; py++) {
+    const wy = (py + 0.5) / S - b.oy
+    for (let px = X0; px <= X1; px++) {
+      const wx = (px + 0.5) / S - b.ox
+      const u = Math.max(0, Math.min(1, ((wx - x0) * dx + (wy - y0) * dy) / L2))
+      if (Math.hypot(wx - x0 - dx * u, wy - y0 - dy * u) <= w) dot(b, px, py, c, a)
+    }
+  }
+}
+
+/** How deep inside a strike a point is: 0 at its heart, its radius at its rim, Infinity outside. */
+function strikeDepth(s: Strike, wx: number, wy: number): number {
+  if (s.shape === 'band') {
+    const dx = s.x2 - s.x
+    const dy = s.y2 - s.y
+    const L2 = dx * dx + dy * dy || 1
+    const u = ((wx - s.x) * dx + (wy - s.y) * dy) / L2
+    if (u < 0 || u > 1) return Infinity
+    return Math.hypot(wx - s.x - dx * u, wy - s.y - dy * u)
+  }
+  const d = Math.hypot(wx - s.x, wy - s.y)
+  if (s.shape === 'cone' && d > 2) {
+    const a = Math.atan2(wy - s.y, wx - s.x) - s.a
+    if (Math.abs(Math.atan2(Math.sin(a), Math.cos(a))) > s.half) return Infinity
+  }
+  return d
+}
+
+/**
+ * A blow about to land: its whole area faint, filling from the heart outward as the moment
+ * nears, its rim bright, blinking white at the very end. Burning floor flickers; mines blink.
+ */
+function drawStrike(b: Buf, live: Live, s: Strike) {
+  if (s.mine > 0) {
+    disc(b, s.x, s.y, 1.5, P.g!)
+    if (Math.floor(live.t * (s.mine < 6.4 ? 6 : 2)) % 2 === 0) fput(b, s.x, s.y - 0.5, P.r!)
+    if (s.mine < 6.4) circle(b, s.x, s.y, s.r - 2, P.r!, 0.18)
+    return
+  }
+  if (s.zone > 0) {
+    disc(b, s.x, s.y, s.r, P.a!, 0.14)
+    const n = Math.round(s.r * s.r * 0.5)
+    const f = Math.floor(live.t * 14)
+    for (let i = 0; i < n; i++) {
+      const a = tileNoise(i, f, 3) * Math.PI * 2
+      const r = Math.sqrt(tileNoise(i, f, 7)) * s.r
+      const h = tileNoise(i, f, 11)
+      fput(b, s.x + Math.cos(a) * r, s.y + Math.sin(a) * r * 0.8 - h, h < 0.3 ? P.y! : h < 0.7 ? P.a! : P.r!, Math.min(1, s.zone))
+    }
+    return
+  }
+  const prog = Math.max(0, Math.min(1, 1 - s.t / Math.max(0.01, s.max)))
+  const blink = prog > 0.78 && Math.floor(live.t * 16) % 2 === 0
+  const rim = blink ? P.w! : s.color
+  if (s.isLaser) {
+    // A thin sight line that thickens to the shot.
+    line(b, s.x, s.y, s.x2, s.y2, rim, 0.35 + 0.6 * prog)
+    if (prog > 0.55) {
+      const [nx, ny] = norm2(s.x2 - s.x, s.y2 - s.y)
+      const w = s.r * (prog - 0.55) / 0.45
+      line(b, s.x - ny * w, s.y + nx * w, s.x2 - ny * w, s.y2 + nx * w, rim, 0.6)
+      line(b, s.x + ny * w, s.y - nx * w, s.x2 + ny * w, s.y2 - nx * w, rim, 0.6)
+    }
+    return
+  }
+  const isPath = s.dmg <= 0 && s.after !== 'summon'
+  // The fill, in one pass: faint everywhere, stronger inside the growing heart.
+  const R = s.r
+  const inner = R * prog
+  const ext = s.shape === 'band' ? [Math.min(s.x, s.x2) - R, Math.min(s.y, s.y2) - R, Math.max(s.x, s.x2) + R, Math.max(s.y, s.y2) + R] : [s.x - R, s.y - R, s.x + R, s.y + R]
+  const X0 = Math.max(0, Math.floor((ext[0]! + b.ox) * S))
+  const X1 = Math.min(RW - 1, Math.ceil((ext[2]! + b.ox) * S))
+  const Y0 = Math.max(0, Math.floor((ext[1]! + b.oy) * S))
+  const Y1 = Math.min(RH - 1, Math.ceil((ext[3]! + b.oy) * S))
+  const lo = isPath ? 0.1 : 0.13
+  const hi = isPath ? 0.1 : 0.3
+  for (let py = Y0; py <= Y1; py++) {
+    const wy = (py + 0.5) / S - b.oy
+    for (let px = X0; px <= X1; px++) {
+      const d = strikeDepth(s, (px + 0.5) / S - b.ox, wy)
+      if (d > R) continue
+      dot(b, px, py, s.color, d <= inner ? hi : lo)
+    }
+  }
+  // The rim.
+  if (s.shape === 'circle') {
+    circle(b, s.x, s.y, R, rim, 0.9)
+    if (s.after === 'summon') for (let i = 0; i < 3; i++) {
+      const a = live.t * 5 + (i * Math.PI * 2) / 3
+      fput(b, s.x + Math.cos(a) * R * 0.6, s.y + Math.sin(a) * R * 0.6, P.w!)
+    }
+  } else if (s.shape === 'cone') {
+    for (const side of [-1, 1]) line(b, s.x, s.y, s.x + Math.cos(s.a + side * s.half) * R, s.y + Math.sin(s.a + side * s.half) * R, rim, 0.85)
+    for (let t = -s.half; t <= s.half; t += 0.6 / (R * S)) fput(b, s.x + Math.cos(s.a + t) * R, s.y + Math.sin(s.a + t) * R, rim, 0.85)
+  } else {
+    const [nx, ny] = norm2(s.x2 - s.x, s.y2 - s.y)
+    line(b, s.x - ny * R, s.y + nx * R, s.x2 - ny * R, s.y2 + nx * R, rim, isPath ? 0.55 : 0.85)
+    line(b, s.x + ny * R, s.y - nx * R, s.x2 + ny * R, s.y2 - nx * R, rim, isPath ? 0.55 : 0.85)
+    if (isPath) {
+      // A charge's path: chevrons running along it.
+      const L = Math.hypot(s.x2 - s.x, s.y2 - s.y)
+      for (let d = ((live.t * 40) % 8) + 4; d < L * Math.min(1, prog * 1.6); d += 8) {
+        const cx = s.x + nx * d
+        const cy = s.y + ny * d
+        line(b, cx - nx * 2 - ny * 2.5, cy - ny * 2 + nx * 2.5, cx, cy, rim, 0.8)
+        line(b, cx - nx * 2 + ny * 2.5, cy - ny * 2 - nx * 2.5, cx, cy, rim, 0.8)
+      }
+    }
+  }
+}
+
+/** The lines a foe shows while it winds up: where it will lunge, charge or shoot. */
+function drawWindup(b: Buf, live: Live, e: Enemy) {
+  const prog = windupOf(e)
+  const [ax, ay] = norm2(e.aimX - e.x, e.aimY - e.y)
+  const a = 0.3 + 0.6 * prog
+  const red = P.r!
+  const ray = (dx: number, dy: number, len: number, c: RGB, alpha: number, y = e.y - 3) => line(b, e.x + dx * 3, y + dy * 3, e.x + dx * len, y + dy * len, c, alpha)
+  switch (e.type) {
+    case 'rat':
+    case 'larva':
+    case 'bug':
+    case 'micro': {
+      const len = e.type === 'rat' ? 18 : 13
+      ray(ax, ay, len, red, a, e.y - 1)
+      fput(b, e.x + ax * len, e.y - 1 + ay * len, P.w!, a)
+      break
+    }
+    case 'skeleton': {
+      const L = rayToWall(live, e.x, e.y, ax, ay, 90)
+      for (const side of [-1, 1]) line(b, e.x - ay * 3.5 * side, e.y + ax * 3.5 * side, e.x + ax * L - ay * 3.5 * side, e.y + ay * L + ax * 3.5 * side, red, 0.25 + 0.5 * prog)
+      line(b, e.x, e.y, e.x + ax * L * prog, e.y + ay * L * prog, prog > 0.8 && Math.floor(live.t * 16) % 2 ? P.w! : red, 0.8)
+      break
+    }
+    case 'slug':
+      for (let d = 4; d < 24; d += 3) fput(b, e.x + ax * d, e.y - 3 + ay * d, red, a)
+      break
+    case 'linter':
+      for (let i = -2; i <= 2; i++) {
+        const c = Math.cos(i * 0.26)
+        const sn = Math.sin(i * 0.26)
+        ray(ax * c - ay * sn, ax * sn + ay * c, 18, P.u!, a)
+      }
+      break
+    case 'sniper': {
+      const isLocked = e.t <= 0.3
+      const L = rayToWall(live, e.x, e.y - 3, ax, ay, 220)
+      const c = isLocked && Math.floor(live.t * 20) % 2 ? P.w! : red
+      line(b, e.x, e.y - 3, e.x + ax * L, e.y - 3 + ay * L, c, isLocked ? 0.95 : 0.35 + 0.3 * prog)
+      if (isLocked) circle(b, e.x + ax * Math.min(L, Math.hypot(e.aimX - e.x, e.aimY - e.y)), e.y - 3 + ay * Math.min(L, Math.hypot(e.aimX - e.x, e.aimY - e.y)), 2.5, c, 0.9)
+      break
+    }
+    case 'turret': {
+      const off = e.pattern % 2 === 0 ? 0 : Math.PI / 4
+      for (let i = 0; i < 4; i++) ray(Math.cos(off + (i * Math.PI) / 2), Math.sin(off + (i * Math.PI) / 2), 12, red, a)
+      break
+    }
+    case 'boss': {
+      const isP2 = (e.phase ?? 1) >= 2
+      if (e.move === 'fan') {
+        const n = isP2 ? 7 : 5
+        for (let i = 0; i < n; i++) {
+          const t = (i - (n - 1) / 2) * 0.2
+          const c = Math.cos(t)
+          const sn = Math.sin(t)
+          ray(ax * c - ay * sn, ax * sn + ay * c, 34, P.u!, a, e.y - e.r)
+        }
+      } else if (e.move === 'burst' || e.move === 'spiral') {
+        circle(b, e.x, e.y - e.r, e.r + 3 + 14 * (1 - prog), e.move === 'burst' ? P.y! : [170, 90, 200], a)
+      }
+      break
+    }
+    default:
+      break
+  }
 }
 
 function drawHud(b: Buf, live: Live, view: View) {

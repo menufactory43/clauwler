@@ -20,7 +20,7 @@ import { SIGNAL_SFX, gainOf, newMixer, pickSounds } from './sound'
 
 const PANE = 'clauwler'
 /** Shown in the pane, so a reload can be told from a stale module. */
-const BUILD = 'v1.3'
+const BUILD = 'v1.4'
 const FPS = 24
 const IDLE_MS = 8000
 const game = atom({ plugin: 'clauwler', key: 'game' } as const, null)
@@ -378,12 +378,13 @@ function viewOf(g: GameState): View {
 }
 
 /** What the loop costs, written to .perf.log beside the mod every two seconds. */
+let paneInfo = ''
 const perf = { since: 0, lastT: 0, ticks: 0, tickGap: 0, blits: 0, render: 0, encode: 0, blit: 0, bytes: 0, panes: 0, lines: [] as string[] }
 
 async function flushPerf($: EngineInterface, t: number) {
   const secs = (t - perf.since) / 1000
   const n = Math.max(1, perf.blits)
-  perf.lines.push(`${new Date(t).toISOString().slice(11, 19)} ${gfx} ticks/s ${(perf.ticks / secs).toFixed(1)} maxGap ${perf.tickGap}ms pictures/s ${(perf.blits / secs).toFixed(1)} render ${(perf.render / n).toFixed(1)}ms encode ${(perf.encode / n).toFixed(1)}ms blit ${(perf.blit / n).toFixed(1)}ms ${Math.round(perf.bytes / n / 1024)}KB paneDraws/s ${(perf.panes / secs).toFixed(1)}`)
+  perf.lines.push(`${new Date(t).toISOString().slice(11, 19)} ${gfx} ticks/s ${(perf.ticks / secs).toFixed(1)} maxGap ${perf.tickGap}ms pictures/s ${(perf.blits / secs).toFixed(1)} render ${(perf.render / n).toFixed(1)}ms encode ${(perf.encode / n).toFixed(1)}ms blit ${(perf.blit / n).toFixed(1)}ms ${Math.round(perf.bytes / n / 1024)}KB paneDraws/s ${(perf.panes / secs).toFixed(1)} ${paneInfo} ${BUILD}`)
   perf.lines = perf.lines.slice(-60)
   Object.assign(perf, { since: t, ticks: 0, tickGap: 0, blits: 0, render: 0, encode: 0, blit: 0, bytes: 0, panes: 0 })
   if (perfPath) await $.fs.write(perfPath, perf.lines.join('\n') + '\n').catch(() => undefined)
@@ -945,6 +946,7 @@ export const register: Register = on => {
           const spareRows = Math.max(8, bodyRows - (g.isPaused || run.offer ? 12 : 4))
           const fitCols = Math.min(e.props.bodyColumns, Math.floor((spareRows * cellAspect * FINE_SIZE.width) / FINE_SIZE.height))
           const fitRows = Math.max(8, Math.round((fitCols * FINE_SIZE.height) / FINE_SIZE.width / cellAspect))
+          paneInfo = `arena ${fitCols}x${fitRows} pane ${e.props.placement} body ${e.props.bodyColumns}x${scrollRows} viewport ${e.viewport?.columns}x${e.viewport?.rows}`
           arena = <Box justifyContent="center"><Image key="arena" source={{ png: frameB64 }} columns={fitCols} rows={fitRows} alt="Pas d'image dans ce terminal." /></Box>
         } else {
           const spare = (e.viewport?.rows ?? 40) - 16

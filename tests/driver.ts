@@ -158,7 +158,7 @@ function aim(live: Live, t: number, g?: GameState): Input {
 
 export type BotResult = { isWin: boolean; depth: number; floors: number; eclats: number; rooms: number; g: GameState; live: Live | null; hurt: number; healed: number; killHealed: number; kills: number }
 
-export function playRun(seed: number, opts: { weapon?: WeaponId; mirror?: Record<string, number>; level?: number; relics?: { effect: string; value: number }[] } = {}): BotResult {
+export function playRun(seed: number, opts: { weapon?: WeaponId; mirror?: Record<string, number>; level?: number; relics?: { effect: string; value: number }[]; onFrame?: (live: Live, g: GameState, t: number) => void } = {}): BotResult {
   let g = fresh()
   for (const [i, r] of (opts.relics ?? []).entries()) {
     g.lineage.vault.push({ id: `bot${i}`, name: 'bot', effect: r.effect, value: r.value, origin: 'bot' } as never)
@@ -187,6 +187,7 @@ export function playRun(seed: number, opts: { weapon?: WeaponId; mirror?: Record
     if (g.run.offer) { g = menu(g, { k: 'pick', i: 0 }, NOW, seed + i); live.stats = combatStats(g); continue }
     const before = live.player.hp
     step(live, botInput(live, t, g), dt)
+    opts.onFrame?.(live, g, t)
     const delta = live.player.hp - before
     const killed = live.signals.filter(one => one.k === 'kill').length
     kills += killed

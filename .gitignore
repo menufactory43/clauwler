@@ -2,3 +2,5 @@
 .snaps/
 .claude-plugin/types/
 node_modules/
+tools/film/film.mjs
+*.mp4

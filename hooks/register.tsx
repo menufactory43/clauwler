@@ -20,7 +20,7 @@ import { SIGNAL_SFX, gainOf, newMixer, pickSounds } from './sound'
 
 const PANE = 'clauwler'
 /** Shown in the pane, so a reload can be told from a stale module. */
-const BUILD = 'v1.1'
+const BUILD = 'v1.2'
 const FPS = 24
 const IDLE_MS = 8000
 const game = atom({ plugin: 'clauwler', key: 'game' } as const, null)
@@ -938,7 +938,10 @@ export const register: Register = on => {
             frameB64 = toBase64(encodeIndexedPng(fineFrame, FINE_SIZE.width, FINE_SIZE.height))
           }
           // As large as the pane allows: its width, or the rows left once the four text lines are drawn.
-          const bodyRows = (e.props as { scroll?: { bodyRows?: number } }).scroll?.bodyRows ?? 40
+          // The pane's scroll window follows its content, so it cannot tell how much room is
+          // left: the terminal's height (less the pane's frame) can.
+          const scrollRows = (e.props as { scroll?: { bodyRows?: number } }).scroll?.bodyRows ?? 0
+          const bodyRows = Math.max(scrollRows, (e.viewport?.rows ?? 40) - 3)
           const spareRows = Math.max(8, bodyRows - (g.isPaused || run.offer ? 12 : 4))
           const fitCols = Math.min(e.props.bodyColumns, Math.floor((spareRows * cellAspect * FINE_SIZE.width) / FINE_SIZE.height))
           const fitRows = Math.max(8, Math.round((fitCols * FINE_SIZE.height) / FINE_SIZE.width / cellAspect))

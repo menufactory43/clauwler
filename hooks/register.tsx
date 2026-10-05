@@ -20,7 +20,7 @@ import { SIGNAL_SFX, gainOf, newMixer, pickSounds } from './sound'
 
 const PANE = 'clauwler'
 /** Shown in the pane, so a reload can be told from a stale module. */
-const BUILD = 'v1.0'
+const BUILD = 'v1.1'
 const FPS = 24
 const IDLE_MS = 8000
 const game = atom({ plugin: 'clauwler', key: 'game' } as const, null)
@@ -45,6 +45,12 @@ let cellsB64 = ''
 /** `quads`: 2x2 quarter blocks, the whole room. `half`: half blocks, zoomed on the champion. `image`: kitty graphics. */
 let gfx: 'quads' | 'half' | 'image' = 'quads'
 let hasStarted = false
+/**
+ * How many times taller than wide a terminal cell is: the picture's rows are
+ * worked out from it. Ghostty's default font and line height give about 2.45;
+ * most other terminals sit near 2.2.
+ */
+let cellAspect = 2.2
 let lastHud = ''
 let lastHudAt = 0
 let arenaCols = 80
@@ -281,6 +287,7 @@ async function start($: EngineInterface, isOpening: boolean) {
   const program = (await $.env.get('TERM_PROGRAM').catch(() => undefined)) ?? ''
   const canPicture = term === 'xterm-ghostty' || term.includes('kitty') || /^(ghostty|WezTerm)$/i.test(program)
   if (!hasStarted) gfx = canPicture ? 'image' : saved === 'half' ? 'half' : 'quads'
+  cellAspect = /ghostty/i.test(program) || term === 'xterm-ghostty' ? 2.45 : 2.2
   hasStarted = true
   const stored = await read($, game)
   // State an older build of the mod left behind is rebuilt from the store.
@@ -933,8 +940,8 @@ export const register: Register = on => {
           // As large as the pane allows: its width, or the rows left once the four text lines are drawn.
           const bodyRows = (e.props as { scroll?: { bodyRows?: number } }).scroll?.bodyRows ?? 40
           const spareRows = Math.max(8, bodyRows - (g.isPaused || run.offer ? 12 : 4))
-          const fitCols = Math.min(e.props.bodyColumns, Math.floor((spareRows * 2 * FINE_SIZE.width) / FINE_SIZE.height))
-          const fitRows = Math.max(8, Math.round((fitCols * FINE_SIZE.height) / FINE_SIZE.width / 2))
+          const fitCols = Math.min(e.props.bodyColumns, Math.floor((spareRows * cellAspect * FINE_SIZE.width) / FINE_SIZE.height))
+          const fitRows = Math.max(8, Math.round((fitCols * FINE_SIZE.height) / FINE_SIZE.width / cellAspect))
           arena = <Box justifyContent="center"><Image key="arena" source={{ png: frameB64 }} columns={fitCols} rows={fitRows} alt="Pas d'image dans ce terminal." /></Box>
         } else {
           const spare = (e.viewport?.rows ?? 40) - 16
@@ -971,7 +978,7 @@ export const register: Register = on => {
               ? <Text bold color="#dad45e" wrap="truncate-end">{hud.banner}</Text>
               : <Text> </Text>
       const shield = Math.floor(live?.effects?.shield ?? 0)
-      const runPad: [string, string][] = [['z', '↑'], ['q', '←'], ['s', '↓'], ['d', '→'], ['e', 'esquive'], ['r', 'pouvoir'], ['p', 'pause · carte'], ['h', 'camp'], ['x', 'son']]
+      const runPad: [string, string][] = [['z', '↑'], ['q', '←'], ['s', '↓'], ['d', '→'], ['e', 'esquive'], ['r', 'pouvoir'], ['p', 'pause'], ['h', 'camp'], ['x', 'son']]
       return (
         <Box flexDirection="column">
           {hud ? (
@@ -992,7 +999,7 @@ export const register: Register = on => {
           <Box flexDirection="row" columnGap={1}>
             {isFocused ? <Text color="#6daa2c" bold>🎮</Text> : <Text color="#dad45e" bold>⌨ ctrl+x tab pour jouer ·</Text>}
             {run.offer ? null : runPad.map(([hotkey, label]) => <Button key={`p-${hotkey}`} plain hotkey={hotkey} label={label} dimColor={!isFocused} onPress={() => onKey($, hotkey)} />)}
-            <Text dimColor>{isMuted ? '🔇' : ''} {BUILD}</Text>
+            {isMuted ? <Text dimColor>🔇</Text> : null}
           </Box>
           {run.offer ? (
             <Box flexDirection="column" marginTop={1}>
@@ -1034,7 +1041,7 @@ export const register: Register = on => {
               </Box>
             </Box>
           )}
-          {g.isPaused && <Text dimColor>⚔ {championTitle(c)} · niv {c.level} · Étage {run.biome + 1}/{BIOMES} {run.biomeName}</Text>}
+          {g.isPaused && <Text dimColor>⚔ {championTitle(c)} · niv {c.level} · Étage {run.biome + 1}/{BIOMES} {run.biomeName} · P carte et build · {BUILD}</Text>}
           {g.isPaused && run.boons.length > 0 && (
             <Text wrap="truncate-end">
               <Text dimColor>Bienfaits </Text>

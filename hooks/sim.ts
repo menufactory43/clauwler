@@ -287,6 +287,9 @@ export type Live = {
   isDead: boolean
   shake: number
   hitstop: number
+  /** When the world last froze or slowed, so the beats stay rare. */
+  lastFreezeAt?: number
+  lastSlowAt?: number
   /** Seconds of slow motion left after the champion is hurt. */
   slow: number
   banner: { text: string; ttl: number } | null
@@ -706,7 +709,8 @@ function damageEnemy(live: Live, e: Enemy, amount: number, isCrit: boolean, kx: 
   const heft = e.type === 'boss' ? 0.12 : e.type === 'turret' ? 0 : e.type === 'monolith' || e.type === 'sentinel' ? 0.5 : 1
   e.kbx = (e.kbx ?? 0) + kx * heft * 12
   e.kby = (e.kby ?? 0) + ky * heft * 12
-  live.hitstop = Math.max(live.hitstop, isCrit ? 0.075 : 0.045)
+  // Only crits freeze, and not twice in a row: a crowd hit every tick would stutter the game.
+  if (isCrit) freeze(live, 0.05)
   if (isCrit) live.shake = Math.max(live.shake, 0.14)
   sfx(live, isCrit ? 'crit' : 'hit')
   num(live, e.x + (rnd(live) - 0.5) * 6, e.y - e.r - 5, isCrit ? `${dmg}!` : `${dmg}`, isCrit ? YELLOW : [222, 238, 214], isCrit)
@@ -737,7 +741,8 @@ function killEnemy(live: Live, e: Enemy) {
   gibs(live, e, isBoss ? 26 : Math.min(12, 4 + e.r))
   sparks(live, e.x, e.y - 2, isBoss ? 16 : 6, e.kind === 'biome' || e.kind === 'minion' ? RED : ORANGE, 55)
   live.fx.push({ kind: 'ring', x: e.x, y: e.y - 2, ttl: 0.2, max: 0.2, color: [222, 238, 214], r: e.r + 5 })
-  live.hitstop = Math.max(live.hitstop, isBoss ? 0.35 : 0.085)
+  if (isBoss) freeze(live, 0.35, true)
+  else if (e.kind !== 'biome' && e.kind !== 'minion') freeze(live, 0.06)
   live.shake = Math.max(live.shake, isBoss ? 0.9 : 0.1)
   if (isBoss) sfx(live, 'explode')
   if (isBoss) {
@@ -792,8 +797,12 @@ function hurtPlayer(live: Live, amount: number, from: Enemy | null, killer: stri
   p.iframes = 0.6
   p.flash = 0.28
   live.shake = Math.max(live.shake, 0.28)
-  live.hitstop = Math.max(live.hitstop, 0.07)
-  live.slow = Math.max(live.slow ?? 0, 0.22)
+  freeze(live, 0.04)
+  // A short slow-down, never back to back: in a crowd blows land often.
+  if (live.t - (live.lastSlowAt ?? -9) > 2) {
+    live.slow = Math.max(live.slow ?? 0, 0.12)
+    live.lastSlowAt = live.t
+  }
   sfx(live, 'hurt')
   num(live, p.x, p.y - 13, `-${amount}`, [238, 112, 92], true)
   sparks(live, p.x, p.y - 4, 5, RED, 45)
@@ -1144,7 +1153,7 @@ export function step(live: Live, input: Input, dtIn: number) {
   // A hurt champion sees the world slow down for a moment.
   if ((live.slow ?? 0) > 0) {
     live.slow = Math.max(0, live.slow - dt)
-    dt *= 0.4
+    dt *= 0.6
   }
   updatePlayer(live, input, dt)
   FX.tickEffects(live, dt, damageEnemy) // build: statuses, orbitals, homing, queued bursts
@@ -1761,7 +1770,7 @@ function phaseShift(live: Live, e: Enemy, g: GuardianDef) {
   if (dist(p.x, p.y, e.x, e.y) < 34) moveBody(live, p, nx * 12, ny * 12, 4)
   live.banner = { text: g.roar, ttl: 1.8 }
   live.shake = Math.max(live.shake, 0.8)
-  live.hitstop = Math.max(live.hitstop, 0.25)
+  freeze(live, 0.25, true)
   live.fx.push({ kind: 'flash', x: 0, y: 0, ttl: 0.4, max: 0.4, color: [222, 238, 214] })
   live.fx.push({ kind: 'ring', x: e.x, y: e.y - e.r, ttl: 0.6, max: 0.6, color: e.kind === 'nemesis' ? [200, 60, 160] : RED, r: 46 })
   sparks(live, e.x, e.y - e.r, 16, YELLOW, 70)
@@ -2071,4 +2080,14 @@ function updateFx(live: Live, dt: number) {
   }
   live.fx = live.fx.filter(fx => fx.ttl > 0)
   if (live.fx.length > 400) live.fx.splice(0, live.fx.length - 400)
+}
+
+/**
+ * Freezes the world for a beat, at most once every 0.4 s unless `isMajor` (a guardian's
+ * death, a phase change): many small freezes read as a game that stutters.
+ */
+function freeze(live: Live, secs: number, isMajor = false) {
+  if (!isMajor && live.t - (live.lastFreezeAt ?? -9) < 0.4) return
+  live.hitstop = Math.max(live.hitstop, secs)
+  live.lastFreezeAt = live.t
 }

@@ -21,7 +21,7 @@ import { getLang, langFromEnv, setLang, tr } from './i18n'
 
 const PANE = 'clauwler'
 /** Shown in the pane, so a reload can be told from a stale module. */
-const BUILD = 'v1.9'
+const BUILD = 'v2.0'
 const FPS = 24
 const IDLE_MS = 8000
 const game = atom({ plugin: 'clauwler', key: 'game' } as const, null)
@@ -74,6 +74,7 @@ let PICTURE_MS = 1000 / 24 - 5
  */
 const BUSY_PICTURE_MS = 1000 / 12 - 5
 let busyUntil = 0
+let lateAvg = 1 / 24
 let lastPictureAt = 0
 let wasFocused = false
 let isLooping = false
@@ -493,7 +494,9 @@ async function tick($: EngineInterface) {
   perf.lastT = t
   if (t - perf.since > 2000) await flushPerf($, t)
   if (!needsFrame || isBlitting || !mirror || !live) return
-  if (dt > 0.065) busyUntil = t + 1500
+  // Busy only when the ticks keep coming late (a second's average), not on one late tick.
+  lateAvg = lateAvg * 0.92 + dt * 0.08
+  if (lateAvg > 0.06) busyUntil = t + 1500
   if (gfx === 'image' && t - lastPictureAt < Math.max(PICTURE_MS, t < busyUntil ? BUSY_PICTURE_MS : 0)) return
   lastPictureAt = t
   needsFrame = false

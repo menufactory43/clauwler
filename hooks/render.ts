@@ -366,13 +366,13 @@ function paintStatic(live: Live) {
 
 /** The room's textured layer, painted once, laid under the frame with the shake's offset. */
 function drawStatic(b: Buf, live: Live) {
-  if (staticFor !== live || staticRes !== S || staticCleared !== live.isCleared || staticPx.length !== RW * RH * 4) {
+  if (staticFor !== live || staticRes !== S || staticPx.length !== RW * RH * 4) {
     if (staticPx.length !== RW * RH * 4) staticPx = new Uint8Array(RW * RH * 4)
     staticFor = live
     staticRes = S
     staticCleared = live.isCleared
     paintStatic(live)
-    // Barred doors never change: they go into the layer; open ones glow, drawn each frame.
+    // Barred doors go into the layer; once open, each frame draws them glowing over the bars.
     if (!live.isCleared) drawDoors({ px: staticPx, ox: 0, oy: -FRAME_TOP }, live)
   }
   const dx = Math.round(b.ox * S)

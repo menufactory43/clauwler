@@ -40,7 +40,7 @@ function run(live: Live, secs: number, input: Input = IDLE) {
   for (let i = 0; i < secs * 24; i++) step(live, input, DT)
 }
 
-test('a solid blow freezes the world for a beat, a kill for longer, and both sound', () => {
+test('a plain blow sounds without freezing; a crit freezes for a beat, never twice in a row', () => {
   const live = arena()
   const e = foe(live, 'goblin', 80, 52)
   e.hp = e.maxHp = 200
@@ -48,7 +48,8 @@ test('a solid blow freezes the world for a beat, a kill for longer, and both sou
   live.player.faceY = -1
   step(live, { ...IDLE, attack: true }, DT)
   expect(e.hp < 200).toBe(true)
-  expect(live.hitstop > 0).toBe(true)
+  // A plain hit keeps the world running; only a crit freezes it.
+  if (!live.sfx.includes('crit')) expect(live.hitstop).toBe(0)
   expect(live.sfx.includes('hit') || live.sfx.includes('crit')).toBe(true)
   // Frozen: the foe does not move while the hitstop lasts.
   const x = e.x + (e.kbx ?? 0) * 0

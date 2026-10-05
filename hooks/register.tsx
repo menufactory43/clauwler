@@ -425,15 +425,15 @@ function viewOf(g: GameState): View {
 /** What the loop costs, written to .perf.log beside the mod every two seconds. */
 let paneInfo = ''
 let spareBelow = 0
-const perf = { since: 0, lastT: 0, ticks: 0, tickGap: 0, blits: 0, render: 0, encode: 0, blit: 0, bytes: 0, panes: 0, lines: [] as string[] }
+const perf = { frozen: 0, slowed: 0, foes: 0, since: 0, lastT: 0, ticks: 0, tickGap: 0, blits: 0, render: 0, encode: 0, blit: 0, bytes: 0, panes: 0, lines: [] as string[] }
 
 async function flushPerf($: EngineInterface, t: number) {
   const secs = (t - perf.since) / 1000
   const n = Math.max(1, perf.blits)
-  perf.lines.push(`${new Date(t).toISOString().slice(11, 19)} ${gfx} ticks/s ${(perf.ticks / secs).toFixed(1)} maxGap ${perf.tickGap}ms pictures/s ${(perf.blits / secs).toFixed(1)} render ${(perf.render / n).toFixed(1)}ms encode ${(perf.encode / n).toFixed(1)}ms blit ${(perf.blit / n).toFixed(1)}ms ${Math.round(perf.bytes / n / 1024)}KB paneDraws/s ${(perf.panes / secs).toFixed(1)} keys/s ${(keysSeen / secs).toFixed(1)} repeat ${Math.round(initialMs)}/${Math.round(repeatMs)}ms ${paneInfo} ${BUILD}`)
+  perf.lines.push(`${new Date(t).toISOString().slice(11, 19)} ${gfx} ticks/s ${(perf.ticks / secs).toFixed(1)} maxGap ${perf.tickGap}ms pictures/s ${(perf.blits / secs).toFixed(1)} render ${(perf.render / n).toFixed(1)}ms encode ${(perf.encode / n).toFixed(1)}ms blit ${(perf.blit / n).toFixed(1)}ms ${Math.round(perf.bytes / n / 1024)}KB paneDraws/s ${(perf.panes / secs).toFixed(1)} keys/s ${(keysSeen / secs).toFixed(1)} foes ${perf.foes} frozen ${Math.round((100 * perf.frozen) / Math.max(1, perf.ticks))}% slowed ${Math.round((100 * perf.slowed) / Math.max(1, perf.ticks))}% repeat ${Math.round(initialMs)}/${Math.round(repeatMs)}ms ${paneInfo} ${BUILD}`)
   perf.lines = perf.lines.slice(-60)
   keysSeen = 0
-  Object.assign(perf, { since: t, ticks: 0, tickGap: 0, blits: 0, render: 0, encode: 0, blit: 0, bytes: 0, panes: 0 })
+  Object.assign(perf, { frozen: 0, slowed: 0, foes: 0, since: t, ticks: 0, tickGap: 0, blits: 0, render: 0, encode: 0, blit: 0, bytes: 0, panes: 0 })
   if (perfPath) await $.fs.write(perfPath, perf.lines.join('\n') + '\n').catch(() => undefined)
 }
 
@@ -490,6 +490,9 @@ async function tick($: EngineInterface) {
     }
   }
   perf.ticks++
+  if (live && live.hitstop > 0) perf.frozen++
+  if (live && (live.slow ?? 0) > 0) perf.slowed++
+  if (live) perf.foes = Math.max(perf.foes, live.enemies.length)
   perf.tickGap = Math.max(perf.tickGap, t - perf.lastT)
   perf.lastT = t
   if (t - perf.since > 2000) await flushPerf($, t)
@@ -872,8 +875,12 @@ export const register: Register = on => {
     return next(e)
   })
 
-  on('command.run', { command: 'clauwler' }, async $ => {
+  on('command.run', { command: 'clauwler' }, async ($, e) => {
     if (!mirror) await start($, false)
+    // A crowd on demand, to measure a big fight: `/clauwler stress`.
+    if ((e as { args?: string }).args?.trim() === 'stress' && live) {
+      for (let i = 0; i < 14; i++) inject(live, { kind: 'fail', sig: 'StressError', name: tr('StressError, la Foule', 'StressError, the Crowd') })
+    }
     // Straight into the dungeon, as Isaac does: the camp if there is one, else a new descent.
     if (mirror && mirror.mode !== 'run') await play($, mirror.run ? { k: 'resume' } : { k: 'newRun' })
     else if (mirror?.isPaused) await change($, g => ({ ...g, isPaused: false }))

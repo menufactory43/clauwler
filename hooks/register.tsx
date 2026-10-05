@@ -21,7 +21,7 @@ import { getLang, langFromEnv, setLang, tr } from './i18n'
 
 const PANE = 'clauwler'
 /** Shown in the pane, so a reload can be told from a stale module. */
-const BUILD = 'v1.8'
+const BUILD = 'v1.9'
 const FPS = 24
 const IDLE_MS = 8000
 const game = atom({ plugin: 'clauwler', key: 'game' } as const, null)
@@ -81,6 +81,12 @@ let lastPaneCheck = 0
 let inputInst = 0
 let lastKeyId = 0
 const held = { up: 0, down: 0, left: 0, right: 0 }
+const lastPress: Partial<Record<keyof typeof held, number>> = {}
+const repeating: Partial<Record<keyof typeof held, boolean>> = {}
+/** The keyboard's repeat, learned as keys arrive: macOS defaults sit near 375 ms, then 90 ms. */
+let initialMs = 380
+let repeatMs = 90
+let keysSeen = 0
 const aim = { up: 0, down: 0, left: 0, right: 0 }
 const edges = { attack: false, special: false, cast: false, dash: false }
 
@@ -423,8 +429,9 @@ const perf = { since: 0, lastT: 0, ticks: 0, tickGap: 0, blits: 0, render: 0, en
 async function flushPerf($: EngineInterface, t: number) {
   const secs = (t - perf.since) / 1000
   const n = Math.max(1, perf.blits)
-  perf.lines.push(`${new Date(t).toISOString().slice(11, 19)} ${gfx} ticks/s ${(perf.ticks / secs).toFixed(1)} maxGap ${perf.tickGap}ms pictures/s ${(perf.blits / secs).toFixed(1)} render ${(perf.render / n).toFixed(1)}ms encode ${(perf.encode / n).toFixed(1)}ms blit ${(perf.blit / n).toFixed(1)}ms ${Math.round(perf.bytes / n / 1024)}KB paneDraws/s ${(perf.panes / secs).toFixed(1)} ${paneInfo} ${BUILD}`)
+  perf.lines.push(`${new Date(t).toISOString().slice(11, 19)} ${gfx} ticks/s ${(perf.ticks / secs).toFixed(1)} maxGap ${perf.tickGap}ms pictures/s ${(perf.blits / secs).toFixed(1)} render ${(perf.render / n).toFixed(1)}ms encode ${(perf.encode / n).toFixed(1)}ms blit ${(perf.blit / n).toFixed(1)}ms ${Math.round(perf.bytes / n / 1024)}KB paneDraws/s ${(perf.panes / secs).toFixed(1)} keys/s ${(keysSeen / secs).toFixed(1)} repeat ${Math.round(initialMs)}/${Math.round(repeatMs)}ms ${paneInfo} ${BUILD}`)
   perf.lines = perf.lines.slice(-60)
+  keysSeen = 0
   Object.assign(perf, { since: t, ticks: 0, tickGap: 0, blits: 0, render: 0, encode: 0, blit: 0, bytes: 0, panes: 0 })
   if (perfPath) await $.fs.write(perfPath, perf.lines.join('\n') + '\n').catch(() => undefined)
 }
@@ -641,11 +648,22 @@ async function handleKey($: EngineInterface, key: string) {
     if (g.isPaused) await change($, s => ({ ...s, isPaused: false }))
     const dir = DIRS[key]
     if (dir) {
-      const isRepeat = held[dir] > t
-      held[dir] = t + (isRepeat ? 160 : 520)
+      // A terminal never says a key went up: a held key is the keyboard's repeat. The game learns
+      // that rhythm (the delay before the first repeat, then the gap between repeats) and stops
+      // the champion as soon as the repeats stop, instead of a fixed half second later.
+      const gap = t - (lastPress[dir] ?? 0)
+      lastPress[dir] = t
+      const isRepeat = held[dir] > t && gap < 900
+      if (isRepeat) {
+        if (repeating[dir]) repeatMs = repeatMs * 0.8 + Math.min(200, Math.max(15, gap)) * 0.2
+        else initialMs = initialMs * 0.7 + Math.min(800, Math.max(150, gap)) * 0.3
+        repeating[dir] = true
+      } else repeating[dir] = false
+      held[dir] = t + (isRepeat ? repeatMs * 1.7 + 25 : initialMs + 50)
       held[OPPOSITE[dir]] = 0
+      keysSeen++
       // A key that repeats keeps the other axis it was pressed with.
-      if (isRepeat) for (const other of PERPENDICULAR[dir]) if (held[other] > t) held[other] = t + 160
+      if (isRepeat) for (const other of PERPENDICULAR[dir]) if (held[other] > t) held[other] = t + repeatMs * 1.7 + 25
       return
     }
     const shot = SHOTS[key]

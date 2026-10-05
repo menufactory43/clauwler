@@ -13,7 +13,9 @@ import { playRun } from '../../tests/driver'
 const out = process.argv[2] ?? 'clauwler.mp4'
 const seed = Number(process.argv[3] ?? 74)
 const seconds = Number(process.argv[4] ?? 75)
-const scale = 6
+const scale = Number(process.env.FILM_SCALE ?? 6)
+/** `boss`: only the guardians' rooms. */
+const only = process.env.FILM_ONLY ?? ''
 setLang((process.env.FILM_LANG as 'fr' | 'en') ?? 'fr')
 
 const size = frameSize(2)
@@ -28,6 +30,7 @@ playRun(seed, {
   level: 6, mirror: { vigueur: 3, force: 2 },
   onFrame: (live, g, t) => {
     if (isDone) return
+    if (only === 'boss' && !live.isBoss) return
     tail = live.enemies.length > 0 ? 36 : tail - 1
     if (tail <= 0 && t > 3) return
     const run = g.run

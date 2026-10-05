@@ -322,8 +322,9 @@ async function start($: EngineInterface, isOpening: boolean) {
   const sessionId = await $.session.id()
   const loaded = await loadContext($)
   root = loaded.root
-  const home = await $.env.get('HOME').catch(() => undefined)
-  if (home) perfPath = `${home}/Clauwler/.perf/${sessionId.slice(0, 8)}.log`
+  // The perf log is for working on the mod: CLAUWLER_PERF=1 writes it to .perf/ in the mod's folder.
+  const isPerf = !!(await $.env.get('CLAUWLER_PERF').catch(() => undefined))
+  if (isPerf) perfPath = `${$.plugin.root}/.perf/${sessionId.slice(0, 8)}.log`
   // Real pixels wherever the terminal draws them, as Claude Code itself decides; a cell
   // mode picked with O or G holds for this session and in terminals without pictures.
   const saved = await $.store.get('gfx')

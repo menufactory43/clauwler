@@ -5,11 +5,13 @@ env = dict(os.environ, TERM='xterm-ghostty', TERM_PROGRAM='ghostty', COLUMNS=str
 for k in list(env):
     if k.startswith('CLAUDE_CODE_') or k in ('CLAUDECODE','CLAUDE_JOB_DIR'): env.pop(k)
 env['CLAUDE_CODE_FORCE_TERMINAL_IMAGES'] = '1'
-env['CLAUDE_CODE_PLUGIN_DIRS'] = os.path.expanduser('~/Clauwler')
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__))) if os.path.basename(os.getcwd()) != '.snaps' else os.path.dirname(os.getcwd())
+env['CLAUDE_CODE_PLUGIN_DIRS'] = ROOT
+env['CLAUWLER_PERF'] = '1'
 env['CLAUDE_CODE_ENABLE_FUNCTION_HOOKS'] = '1'
 pid, fd = pty.fork()
 if pid == 0:
-    os.chdir(os.environ.get('BENCH_CWD', os.path.expanduser('~/couleur')))
+    os.chdir(os.environ.get('BENCH_CWD', ROOT))
     os.execvpe('claude', ['claude'], env)
 import fcntl, termios, struct
 fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack('HHHH', ROWS, COLS, 0, 0))

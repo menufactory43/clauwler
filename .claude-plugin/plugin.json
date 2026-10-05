@@ -1,6 +1,18 @@
 {
   "name": "clauwler",
-  "version": "0.1.0",
-  "description": "A real-time pixel-art roguelike in a pane, fed by your Claude session: its errors become monsters, its commits forge relics. / Un roguelike pixel-art en temps réel nourri par ta session Claude.",
+  "version": "1.0.0",
+  "description": "A real-time pixel-art roguelike in a Claude Code pane, fed by your session: errors become monsters, commits forge relics.",
+  "author": {
+    "name": "meffysto"
+  },
+  "homepage": "https://github.com/meffysto/clauwler",
+  "repository": "https://github.com/meffysto/clauwler",
+  "license": "MIT",
+  "keywords": [
+    "game",
+    "roguelike",
+    "pixel-art",
+    "mod"
+  ],
   "types": "./types/index.d.ts"
 }

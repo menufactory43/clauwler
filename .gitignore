@@ -4,3 +4,7 @@
 node_modules/
 tools/film/film.mjs
 *.mp4
+.perf.log
+tools/real.py
+tools/watch.sh
+.DS_Store

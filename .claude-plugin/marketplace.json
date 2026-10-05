@@ -1,0 +1,11 @@
+{
+  "name": "clauwler",
+  "owner": { "name": "meffysto" },
+  "plugins": [
+    {
+      "name": "clauwler",
+      "source": "./",
+      "description": "A real-time pixel-art roguelike in a Claude Code pane, fed by your session: errors become monsters, commits forge relics."
+    }
+  ]
+}

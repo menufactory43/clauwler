@@ -20,7 +20,7 @@ import { SIGNAL_SFX, gainOf, newMixer, pickSounds } from './sound'
 
 const PANE = 'clauwler'
 /** Shown in the pane, so a reload can be told from a stale module. */
-const BUILD = 'v1.4'
+const BUILD = 'v1.5'
 const FPS = 24
 const IDLE_MS = 8000
 const game = atom({ plugin: 'clauwler', key: 'game' } as const, null)
@@ -47,7 +47,7 @@ let gfx: 'quads' | 'half' | 'image' = 'quads'
 let hasStarted = false
 /**
  * How many times taller than wide a terminal cell is: the picture's rows are
- * worked out from it. Ghostty's default font and line height give about 2.45;
+ * worked out from it. Ghostty's default font and line height give about 2.15 (measured on a screenshot);
  * most other terminals sit near 2.2.
  */
 let cellAspect = 2.2
@@ -287,7 +287,7 @@ async function start($: EngineInterface, isOpening: boolean) {
   const program = (await $.env.get('TERM_PROGRAM').catch(() => undefined)) ?? ''
   const canPicture = term === 'xterm-ghostty' || term.includes('kitty') || /^(ghostty|WezTerm)$/i.test(program)
   if (!hasStarted) gfx = canPicture ? 'image' : saved === 'half' ? 'half' : 'quads'
-  cellAspect = /ghostty/i.test(program) || term === 'xterm-ghostty' ? 2.45 : 2.2
+  cellAspect = /ghostty/i.test(program) || term === 'xterm-ghostty' ? 2.15 : 2.2
   hasStarted = true
   const stored = await read($, game)
   // State an older build of the mod left behind is rebuilt from the store.
@@ -379,6 +379,7 @@ function viewOf(g: GameState): View {
 
 /** What the loop costs, written to .perf.log beside the mod every two seconds. */
 let paneInfo = ''
+let spareBelow = 0
 const perf = { since: 0, lastT: 0, ticks: 0, tickGap: 0, blits: 0, render: 0, encode: 0, blit: 0, bytes: 0, panes: 0, lines: [] as string[] }
 
 async function flushPerf($: EngineInterface, t: number) {
@@ -942,10 +943,12 @@ export const register: Register = on => {
           // The pane's scroll window follows its content, so it cannot tell how much room is
           // left: the terminal's height (less the pane's frame) can.
           const scrollRows = (e.props as { scroll?: { bodyRows?: number } }).scroll?.bodyRows ?? 0
-          const bodyRows = Math.max(scrollRows, (e.viewport?.rows ?? 40) - 3)
+          const bodyRows = scrollRows > 0 ? scrollRows : (e.viewport?.rows ?? 40) - 3
           const spareRows = Math.max(8, bodyRows - (g.isPaused || run.offer ? 12 : 4))
           const fitCols = Math.min(e.props.bodyColumns, Math.floor((spareRows * cellAspect * FINE_SIZE.width) / FINE_SIZE.height))
           const fitRows = Math.max(8, Math.round((fitCols * FINE_SIZE.height) / FINE_SIZE.width / cellAspect))
+          // Rows the arena leaves free: the map and the log fill them when there are enough.
+          spareBelow = bodyRows - fitRows - 4
           paneInfo = `arena ${fitCols}x${fitRows} pane ${e.props.placement} body ${e.props.bodyColumns}x${scrollRows} viewport ${e.viewport?.columns}x${e.viewport?.rows}`
           arena = <Box justifyContent="center"><Image key="arena" source={{ png: frameB64 }} columns={fitCols} rows={fitRows} alt="Pas d'image dans ce terminal." /></Box>
         } else {
@@ -1038,7 +1041,7 @@ export const register: Register = on => {
                 )
               })}
             </Box>
-          ) : !g.isPaused ? null : (
+          ) : !g.isPaused && spareBelow < 5 ? null : (
             <Box flexDirection="row" columnGap={2} marginTop={1}>
               {minimap(run)}
               <Box flexDirection="column" flexShrink={1}>
